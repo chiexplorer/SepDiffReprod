@@ -7,8 +7,6 @@
     "adam_b2": 0.99,
     "lr_decay": 0.999,
     "seed": 1234,
-    "ckpt_path": "D:\\Projects\\pyprog\\SepDiffReprod\\save\\ckpt_68_.pt",
-
     "upsample_rates": [4,4,2,2,2,2],
     "upsample_kernel_sizes": [8,8,4,4,4,4],
     "upsample_initial_channel": 1536,
@@ -74,7 +72,7 @@
     "save_weight_dir": "D:/Projects/pyprog/SepDiffReprod/save",
     "sample_opt": {
         "timesteps": 1000,
-        "batch_size": 16,
+        "batch_size": 8,
         "channels": 3,
         "image_size": 32
     }

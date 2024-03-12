@@ -186,6 +186,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         for data_cfg in self.dataset_configs.values():
             instantiate_from_config(data_cfg)
 
+
     def setup(self, stage=None):
         self.datasets = dict(
             (k, instantiate_from_config(self.dataset_configs[k]))
@@ -320,7 +321,18 @@ class ImageLogger(Callback):
     @rank_zero_only
     def log_local(self, save_dir, split, images,
                   global_step, current_epoch, batch_idx):
+        """
+        :desc: 保存log images到指定文件夹
+        :param save_dir:
+        :param split:
+        :param images:
+        :param global_step:
+        :param current_epoch:
+        :param batch_idx:
+        :return:
+        """
         root = os.path.join(save_dir, "images", split)
+        # 将images内的图片保存到对应路径下
         for k in images:
             grid = torchvision.utils.make_grid(images[k], nrow=4)
             if self.rescale:
@@ -339,6 +351,7 @@ class ImageLogger(Callback):
 
     def log_img(self, pl_module, batch, batch_idx, split="train"):
         check_idx = batch_idx if self.log_on_batch_idx else pl_module.global_step
+        # 若符合log img条件
         if (self.check_frequency(check_idx) and  # batch_idx % self.batch_freq == 0
                 hasattr(pl_module, "log_images") and
                 callable(pl_module.log_images) and
@@ -349,17 +362,19 @@ class ImageLogger(Callback):
             if is_train:
                 pl_module.eval()
 
+            # 以eval模式产生要log的各种图片
             with torch.no_grad():
                 images = pl_module.log_images(batch, split=split, **self.log_images_kwargs)
-
+            # 裁剪并转换格式
             for k in images:
+                # 裁剪到N张图片
                 N = min(images[k].shape[0], self.max_images)
                 images[k] = images[k][:N]
                 if isinstance(images[k], torch.Tensor):
                     images[k] = images[k].detach().cpu()
                     if self.clamp:
                         images[k] = torch.clamp(images[k], -1., 1.)
-
+            # 存到本地指定路径下
             self.log_local(pl_module.logger.save_dir, split, images,
                            pl_module.global_step, pl_module.current_epoch, batch_idx)
 
@@ -479,10 +494,9 @@ if __name__ == "__main__":
         if not os.path.exists(opt.resume):
             raise ValueError("Cannot find {}".format(opt.resume))
         if os.path.isfile(opt.resume):
-            paths = opt.resume.split("/")
-            # idx = len(paths)-paths[::-1].index("logs")+1
-            # logdir = "/".join(paths[:idx])
-            logdir = "/".join(paths[:-2])
+            paths = opt.resume.split("\\")
+            idx = len(paths) - paths[::-1].index("logs")+1
+            logdir = "/".join(paths[:idx])
             ckpt = opt.resume
         else:
             assert os.path.isdir(opt.resume), opt.resume
@@ -518,12 +532,12 @@ if __name__ == "__main__":
         lightning_config = config.pop("lightning", OmegaConf.create())
         # merge trainer cli with config
         trainer_config = lightning_config.get("trainer", OmegaConf.create())
-        # default to ddp
-        trainer_config["accelerator"] = "ddp"
+        # default to ddp  # "dpp"改""
+        # trainer_config["accelerator"] = "ddp"
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
         if not "gpus" in trainer_config:
-            del trainer_config["accelerator"]
+            # del trainer_config["accelerator"]
             cpu = True
         else:
             gpuinfo = trainer_config["gpus"]
@@ -571,9 +585,9 @@ if __name__ == "__main__":
             "target": "pytorch_lightning.callbacks.ModelCheckpoint",
             "params": {
                 "dirpath": ckptdir,
-                "filename": "{epoch:06}",
+                "filename": "{epoch:03}",
                 "verbose": True,
-                "save_last": True,
+                "save_last": False,
             }
         }
         if hasattr(model, "monitor"):
@@ -607,7 +621,7 @@ if __name__ == "__main__":
             "image_logger": {
                 "target": "main.ImageLogger",
                 "params": {
-                    "batch_frequency": 750,
+                    "batch_frequency": 500,
                     "max_images": 4,
                     "clamp": True
                 }
@@ -660,16 +674,27 @@ if __name__ == "__main__":
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
-        # data
-        data = instantiate_from_config(config.data)
-        # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
-        # calling these ourselves should not be necessary but it is.
-        # lightning still takes care of proper multiprocessing though
-        data.prepare_data()
-        data.setup()
-        print("#### Data #####")
-        for k in data.datasets:
-            print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+        tmp_mode = 'normal'  # 通常为'normal', 'cifar10'为临时添加的CIFAR10支持
+        if tmp_mode == "normal":
+            # data
+            data = instantiate_from_config(config.data)
+            data.prepare_data()
+            data.setup()
+            print("#### Data #####")
+            for k in data.datasets:
+                print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+        elif tmp_mode == 'cifar10':
+            from torchvision.datasets import CIFAR10
+            from torchvision import transforms
+            dataset = CIFAR10(
+                root='save/CIFAR10', train=True, download=True,
+                transform=transforms.Compose([
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                ]))
+            data = DataLoader(
+                dataset, batch_size=64, num_workers=0, shuffle=True, drop_last=True, pin_memory=True)
 
         # configure learning rate
         bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
@@ -693,6 +718,11 @@ if __name__ == "__main__":
             print("++++ NOT USING LR SCALING ++++")
             print(f"Setting learning rate to {model.learning_rate:.2e}")
 
+        # 配置clip_norm
+        if "gradient_clip_val" in config.model:
+            clip_norm = config.model["gradient_clip_val"]
+            print(f"Clip norm with value [{clip_norm}]")
+            trainer.gradient_clip_val = clip_norm
 
         # allow checkpointing via USR1
         def melk(*args, **kwargs):
@@ -705,21 +735,21 @@ if __name__ == "__main__":
 
         def divein(*args, **kwargs):
             if trainer.global_rank == 0:
-                import pudb;
+                import pudb
                 pudb.set_trace()
 
 
         import signal
-
-        signal.signal(signal.SIGUSR1, melk)
-        signal.signal(signal.SIGUSR2, divein)
+        # # windows系统不支持
+        # signal.signal(signal.SIGTERM1, melk)
+        # signal.signal(signal.SIGUSR2, divein)
 
         # run
         if opt.train:
             try:
                 trainer.fit(model, data)
-            except Exception:
-                melk()
+            except Exception as e:
+                print("Exception occurred when fit: ", e)
                 raise
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data)

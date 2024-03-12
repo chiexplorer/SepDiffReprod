@@ -981,8 +981,8 @@ if __name__ == '__main__':
     # UNet模型测试
     params = {
         "image_size": 64,
-        "in_channels": 1,
-        "out_channels": 1,
+        "in_channels": 3,
+        "out_channels": 2,
         "model_channels": 128,
         "attention_resolutions": [8, 4, 2],
         "num_res_blocks": 2,
@@ -991,10 +991,10 @@ if __name__ == '__main__':
     }
     model = UNetModel(**params)
     model = model.cuda()
-    x = torch.randn(4, 1, 80, 320, device='cuda')
+    x = torch.randn(4, 3, 80, 320, device='cuda')
     timestamps = torch.randn(4, device='cuda')
     pred = model(x, timestamps)
-    summary(model, input_data=[x, timestamps], mode='train')
+    # summary(model, input_data=[x, timestamps], mode='train')
     print(pred.shape)
 
     # # ResBlock模块测试

@@ -1,4 +1,10 @@
 {
+    "csv_path": "D:/Projects/pyprog/SepDiffReprod/save/aishell1mix2_test.csv",
+    "mel_path": "D:\\Projects\\pyprog\\SepDiffReprod\\save\\libri2mix_train-100.csv",
+    "use_mel_file": true,
+    "orig_sample_rate": 16000,
+    "sampling_rate": 22050,
+    "fixed_len": 82000,
     "resblock": "1",
     "num_gpus": 0,
     "learning_rate": 0.0001,
@@ -30,8 +36,6 @@
     "hop_size": 256,
     "win_size": 1024,
 
-    "sampling_rate": 22050,
-
     "fmin": 0,
     "fmax": 8000,
     "fmax_for_loss": null,
@@ -52,15 +56,15 @@
     "validate_data": "",
     "test_data": "",
     "dataloader_opts" : {
-        "batch_size": 128,
-        "num_workers": 4
+        "batch_size": 2,
+        "num_workers": 0
     },
     "unet_config": {
         "image_size": "",
         "image_width": 80,
-        "image_height": 344,
+        "image_height": 320,
         "in_channels": 3,
-        "out_channels": 3,
+        "out_channels": 2,
         "model_channels": 128,
         "attention_resolutions": [2],
         "num_res_blocks": 2,
@@ -72,7 +76,7 @@
     "linear_start": 1e-4,
     "linear_end": 2e-2,
     "grad_clip": 1.0,
-    "save_weight_dir": "D:/Projects/pyprog/SepDiffReprod/save",
+    "save_weight_dir": "D:\\Projects\\pyprog\\SepDiffReprod\\save\\LibriMix",
     "sample_opt": {
         "timesteps": 1000,
         "batch_size": 16,

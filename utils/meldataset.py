@@ -67,6 +67,7 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
         print('max value is ', torch.max(y))
 
     global mel_basis, hann_window
+    # 创建mel滤波器组
     if fmax not in mel_basis:
         mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
         mel_basis[str(fmax)+'_'+str(y.device)] = torch.from_numpy(mel).float().to(y.device)  # mel 滤波器组
@@ -78,13 +79,14 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
     # complex tensor as default, then use view_as_real for future pytorch compatibility
     spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
                       center=center, pad_mode='reflect', normalized=False, onesided=True, return_complex=True)
-    spec = torch.view_as_real(spec)  # 取实部
-    spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))  # 取幅度谱，加上一个足够小的常数防止除零错误
+    spec = torch.view_as_real(spec)
+    spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
 
     spec = torch.matmul(mel_basis[str(fmax)+'_'+str(y.device)], spec)  # 应用 mel滤波器组
+    mel_spec_max = spec.max()  # 临时使用
     spec = spectral_normalize_torch(spec)  # 谱归一化
 
-    return spec
+    return spec, mel_spec_max
 
 
 def get_dataset_filelist(a):

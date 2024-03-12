@@ -1,0 +1,118 @@
+model:
+  base_learning_rate: 2.0e-06
+  target: ldm.models.diffusion.ddpm.LatentDiffusion
+  params:
+    linear_start: 0.0015
+    linear_end: 0.0195
+    num_timesteps_cond: 1
+    log_every_t: 200
+    timesteps: 1000
+    first_stage_key:
+      - "s1_mel"
+      - "s2_mel"
+    cond_stage_key: "mix_mel"
+    image_size: 32
+    channels: 3
+    cond_stage_trainable: false
+    conditioning_key: crossattn
+    monitor: train_loss
+    unet_config:
+      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      params:
+        image_size: 32
+        in_channels: 256
+        out_channels: 256
+        model_channels: 128
+        attention_resolutions:
+        # note: this isn\t actually the resolution but
+        # the downsampling factor, i.e. this corresnponds to
+        # attention on spatial resolution 8,16,32, as the
+        # spatial reolution of the latents is 64 for f4
+        - 2
+        num_res_blocks: 2
+        channel_mult:
+        - 1
+        - 2
+        - 3
+        - 4
+        num_head_channels: 32
+        use_spatial_transformer: true
+        transformer_depth: 1
+        context_dim: 256
+    first_stage_config:
+      target: ldm.models.autoencoder.VQModelInterface
+      params:
+        embed_dim: 256
+        n_embed: 1024
+        ckpt_path: "H:/exp/log/2024-03-05T21-50-23_librimix_vqgan/checkpoints/last.ckpt"
+        ddconfig:
+          double_z: false
+          z_channels: 64
+          resolution: 256
+          in_channels: 1
+          out_ch: 1
+          ch: 128
+          ch_mult:
+          - 1
+          - 1
+          - 2
+          - 2
+          - 4
+          num_res_blocks: 2
+          attn_resolutions:
+          - 16
+          dropout: 0.0
+        lossconfig:
+          target: torch.nn.Identity
+    cond_stage_config: "__is_first_stage__"
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 64
+    num_workers: 0
+    wrap: false
+    train:
+      target: ldm.data.librimix.LibriMixData
+      params:
+        config:
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/libri2mix_train-100-test.csv"
+          use_mel_file: True
+          orig_sample_rate: 16000
+          sampling_rate: 22050
+          n_fft: 1024
+          hop_size: 256
+          win_size: 1024
+          num_mels: 80
+          fmin: 0
+          fmax: 8000
+          fixed_len: 82000
+    validation:
+      target: ldm.data.librimix.LibriMixData
+      params:
+        config:
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/libri2mix_dev-test.csv"
+          use_mel_file: True
+          orig_sample_rate: 16000
+          sampling_rate: 22050
+          n_fft: 1024
+          hop_size: 256
+          win_size: 1024
+          num_mels: 80
+          fmin: 0
+          fmax: 8000
+          fixed_len: 82000
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 5000
+        max_images: 2
+        increase_log_steps: False
+
+  trainer:
+    benchmark: True
+    max_epochs: 100
+    precision: 32
