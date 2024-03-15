@@ -1002,10 +1002,10 @@ class DDPMCustom(pl.LightningModule):
         self.batch_idx = batch_idx  # 临时记录
         loss, loss_dict = self.shared_step(batch)
 
-        # self.log_dict(loss_dict, prog_bar=True,
-        #               logger=True, on_step=True, on_epoch=True)
-        self.log("train_loss", loss, prog_bar=True,
+        self.log_dict(loss_dict, prog_bar=True,
                       logger=True, on_step=True, on_epoch=True)
+        # self.log("train_loss", loss, prog_bar=True,
+        #               logger=True, on_step=True, on_epoch=True)
         # self.log("global_step", self.global_step,
         #          prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
@@ -1758,6 +1758,7 @@ class LatentDiffusion(DDPM):
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
+        self.logvar = self.logvar.to(self.device)  # 修正代码 设备不一致错误
         logvar_t = self.logvar[t].to(self.device)
         loss = loss_simple / torch.exp(logvar_t) + logvar_t
         # loss = loss_simple / torch.exp(self.logvar) + self.logvar
@@ -1771,7 +1772,7 @@ class LatentDiffusion(DDPM):
         loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
         loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
         loss += (self.original_elbo_weight * loss_vlb)
-        loss_dict.update({f'{prefix}/loss': loss})
+        loss_dict.update({f'{prefix}_loss': loss})
 
         return loss, loss_dict
 

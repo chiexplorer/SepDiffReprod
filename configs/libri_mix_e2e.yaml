@@ -8,9 +8,9 @@ model:
     log_every_t: 200
     timesteps: 1000
     first_stage_key:
-      - "s1_mel"
-      - "s2_mel"
-    cond_stage_key: "mix_mel"
+      - "s1_wav"
+      - "s2_wav"
+    cond_stage_key: "mix_wav"
     image_size: 32
     channels: 3
     cond_stage_trainable: false
@@ -24,7 +24,7 @@ model:
         out_channels: 256
         model_channels: 128
         attention_resolutions:
-        # note: this isn\t actually the resolution but
+        # note: this isn't actually the resolution but
         # the downsampling factor, i.e. this corresnponds to
         # attention on spatial resolution 8,16,32, as the
         # spatial reolution of the latents is 64 for f4
@@ -76,10 +76,10 @@ data:
       target: ldm.data.librimix.LibriMixData
       params:
         config:
-          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/libri2mix_train-100-test.csv"
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/wav/libri2mix_train-100-test.csv"
           use_mel_file: True
           orig_sample_rate: 16000
-          sampling_rate: 22050
+          sampling_rate: 16000
           n_fft: 1024
           hop_size: 256
           win_size: 1024
@@ -91,7 +91,7 @@ data:
       target: ldm.data.librimix.LibriMixData
       params:
         config:
-          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/libri2mix_dev-test.csv"
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/wav/libri2mix_dev-test.csv"
           use_mel_file: True
           orig_sample_rate: 16000
           sampling_rate: 22050
@@ -101,7 +101,7 @@ data:
           num_mels: 80
           fmin: 0
           fmax: 8000
-          fixed_len: 82000
+          fixed_len: 65536
 
 lightning:
   callbacks:

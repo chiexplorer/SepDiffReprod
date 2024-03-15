@@ -4,7 +4,6 @@ import time
 import torch
 import torchvision
 import pytorch_lightning as pl
-
 from packaging import version
 from omegaconf import OmegaConf
 from torch.utils.data import random_split, DataLoader, Dataset, Subset
@@ -581,11 +580,12 @@ if __name__ == "__main__":
 
         # modelcheckpoint - use TrainResult/EvalResult(checkpoint_on=metric) to
         # specify which metric is used to determine best models
+        # pl.callbacks.ModelCheckpoint
         default_modelckpt_cfg = {
             "target": "pytorch_lightning.callbacks.ModelCheckpoint",
             "params": {
                 "dirpath": ckptdir,
-                "filename": "{epoch:03}",
+                "filename": "{epoch:03}-{train_loss:.4f}",
                 "verbose": True,
                 "save_last": False,
             }
@@ -672,7 +672,7 @@ if __name__ == "__main__":
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
 
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
-        trainer.logdir = logdir  ###
+        trainer.logdir = logdir
 
         tmp_mode = 'normal'  # 通常为'normal', 'cifar10'为临时添加的CIFAR10支持
         if tmp_mode == "normal":

@@ -139,9 +139,9 @@ def create_libri2mix_csv(
 if __name__ == '__main__':
     # fpath = r"D:\Data\AiShell1-mix-test"
     # fpath = r"D:\Data\LibriMixAligned\Libri2Mix"
-    fpath = r"H:\exp\dataset\LibriMixAligned\Libri2Mix"  # 专用固态
+    fpath = r"H:\exp\dataset\LibriMix\Libri2Mix"  # 专用固态
 
-    savepath = "../save/LibriMixAligned"
+    savepath = "../data/wav"
     # create_aishell1mix2_csv(datapath=fpath, savepath=savepath)
     create_libri2mix_csv(
         datapath=fpath,

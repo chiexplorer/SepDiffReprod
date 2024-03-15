@@ -194,7 +194,7 @@ class CrossAttention(nn.Module):
 
 
 class BasicTransformerBlock(nn.Module):
-    def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True):
+    def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=False):
         super().__init__()
         self.attn1 = CrossAttention(query_dim=dim, heads=n_heads, dim_head=d_head, dropout=dropout)  # is a self-attention
         self.ff = FeedForward(dim, dropout=dropout, glu=gated_ff)
@@ -252,18 +252,18 @@ class SpatialTransformer(nn.Module):
         b, c, h, w = x.shape
         x_in = x
         x = self.norm(x)
-        x = self.proj_in(x)
-        x = rearrange(x, 'b c h w -> b (h w) c')  # 原代码
+        x = self.proj_in(x)  # in_channel -> inner_dim
+        x = rearrange(x, 'b c h w -> b (h w) c')  # 原代码 patch
         # x = rearrange(x, 'b c h w -> b (c w) h')  # librimix无压缩版 临时用
         # 临时用，处理二维条件形式的输入
         if context is not None:
-            # context = rearrange(context, 'b c h w ->b (h w) c')
-            context = rearrange(context, 'b c h w ->b (c w) h')  # librimix无压缩版 临时用
+            context = rearrange(context, 'b c h w ->b (h w) c')
+            # context = rearrange(context, 'b c h w ->b (c w) h')  # librimix无压缩版 临时用
         for block in self.transformer_blocks:
             x = block(x, context=context)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)  # 原代码
         # x = rearrange(x, 'b (c w) h -> b c h w', h=h, w=w)  # librimix无压缩版 临时用
-        x = self.proj_out(x)
+        x = self.proj_out(x)  # inner_dim -> in_channel
         return x + x_in
 
 

@@ -49,7 +49,7 @@ data:
       target: ldm.data.librimix.LibriMixData
       params:
         config:
-          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/libri2mix_train-100-test.csv"
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_train-100-test.csv"
           use_mel_file: True
           orig_sample_rate: 16000
           sampling_rate: 22050
@@ -64,7 +64,7 @@ data:
       target: ldm.data.librimix.LibriMixData
       params:
         config:
-          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/libri2mix_dev-test.csv"
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_dev-test.csv"
           use_mel_file: True
           orig_sample_rate: 16000
           sampling_rate: 22050

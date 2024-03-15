@@ -1,0 +1,15 @@
+ID,duration,mix_wav,mix_wav_format,mix_wav_opts,s1_wav,s1_wav_format,s1_wav_opts,s2_wav,s2_wav_format,s2_wav_opts,noise_wav,noise_wav_format,noise_wav_opts
+
+0,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\mix_clean/103-1240-0003_1235-135887-0017.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s1/103-1240-0003_1235-135887-0017.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s2/103-1240-0003_1235-135887-0017.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\noise/103-1240-0003_1235-135887-0017.wav,wav,
+
+1,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\mix_clean/103-1240-0004_4195-186237-0003.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s1/103-1240-0004_4195-186237-0003.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s2/103-1240-0004_4195-186237-0003.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\noise/103-1240-0004_4195-186237-0003.wav,wav,
+
+2,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\mix_clean/103-1240-0005_2836-5355-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s1/103-1240-0005_2836-5355-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s2/103-1240-0005_2836-5355-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\noise/103-1240-0005_2836-5355-0030.wav,wav,
+
+3,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\mix_clean/103-1240-0006_6000-55211-0006.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s1/103-1240-0006_6000-55211-0006.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s2/103-1240-0006_6000-55211-0006.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\noise/103-1240-0006_6000-55211-0006.wav,wav,
+
+4,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\mix_clean/103-1240-0009_2391-145015-0120.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s1/103-1240-0009_2391-145015-0120.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s2/103-1240-0009_2391-145015-0120.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\noise/103-1240-0009_2391-145015-0120.wav,wav,
+
+5,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\mix_clean/103-1240-0011_4018-107338-0007.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s1/103-1240-0011_4018-107338-0007.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s2/103-1240-0011_4018-107338-0007.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\noise/103-1240-0011_4018-107338-0007.wav,wav,
+
+6,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\mix_clean/103-1240-0014_6880-216547-0009.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s1/103-1240-0014_6880-216547-0009.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\s2/103-1240-0014_6880-216547-0009.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/train-100\noise/103-1240-0014_6880-216547-0009.wav,wav,

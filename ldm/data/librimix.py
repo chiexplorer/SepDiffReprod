@@ -22,10 +22,11 @@ class LibriMixData(Dataset):
         self.use_mel_file = config['use_mel_file']  # 是否使用mel npy文件
         self.df = pd.read_csv(config['mel_path']) if self.use_mel_file else pd.read_csv(config['csv_path'])
         self.fixed_len = config['fixed_len'] if "fixed_len" in config else None
+        self.image_size = config['image_size'] if "image_size" in config else None
         self.resampler = None if config['orig_sample_rate'] == config['sampling_rate'] \
             else torchaudio.transforms.Resample(orig_freq=self.config['orig_sample_rate'],
                                                            new_freq=self.config['sampling_rate'])
-        self.get_mel()
+        self.init_data()
 
     def __len__(self):
         return len(self.data)
@@ -33,7 +34,7 @@ class LibriMixData(Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
 
-    def get_mel(self):
+    def init_data(self):
         for i, record in tqdm(self.df.iterrows()):
             item = {}
             # load from mel file
@@ -65,16 +66,23 @@ class LibriMixData(Dataset):
                         mix = align_audio(mix, self.fixed_len)
                         s1 = align_audio(s1, self.fixed_len)
                         s2 = align_audio(s2, self.fixed_len)
-                    mix_mel = get_mel(mix, self.config)
-                    s1_mel = get_mel(s1, self.config)
-                    s2_mel = get_mel(s2, self.config)
-                    # # 暂时用不到wav
-                    # item['mix_wav'] = mix
-                    # item['s1_wav'] = s1
-                    # item['s2_wav'] = s2
-                    item['mix_mel'] = mix_mel
-                    item['s1_mel'] = s1_mel
-                    item['s2_mel'] = s2_mel
+                    # reshape
+                    if self.image_size is not None:
+                        mix = mix.view(1, self.image_size, self.image_size)
+                        s1 = s1.view(1, self.image_size, self.image_size)
+                        s2 = s2.view(1, self.image_size, self.image_size)
+                    # mix_mel = get_mel(mix, self.config)
+                    # s1_mel = get_mel(s1, self.config)
+                    # s2_mel = get_mel(s2, self.config)
+                    # Mel spec时，用不到wav
+                    item['mix_wav'] = mix
+                    item['s1_wav'] = s1
+                    item['s2_wav'] = s2
+
+                    # # E2E时，用不到mel spec
+                    # item['mix_mel'] = mix_mel
+                    # item['s1_mel'] = s1_mel
+                    # item['s2_mel'] = s2_mel
                     self.data.append(item)
                 except Exception as e:
                     print(f"record ID {record['ID']} Exception occured: { e }")
@@ -82,25 +90,27 @@ class LibriMixData(Dataset):
 
 if __name__ == '__main__':
     # # audio file
-    # fpath = r"D:\Projects\pyprog\SepDiffReprod\save\aishell1mix2_test.csv"
+    fpath = r"D:\Projects\pyprog\SepDiffReprod\data\wav\libri2mix_train-100-test.csv"
     # # npy file
-    fpath = r"D:\Projects\pyprog\SepDiffReprod\save\libri2mix_test.csv"
+    # fpath = r"D:\Projects\pyprog\SepDiffReprod\save\libri2mix_test.csv"
+    use_mel = False
     hparams = {
         'csv_path': fpath,
         'mel_path': fpath,
-        "use_mel_file": True,
+        "use_mel_file": use_mel,
         'orig_sample_rate': 16000,
-        'sampling_rate': 22050,
+        'sampling_rate': 16000,
         'n_fft': 1024,
         "hop_size": 256,
         "win_size": 1024,
         "num_mels": 80,
         "fmin": 0,
         "fmax": 8000,
-        "fixed_len": 82000,
+        "fixed_len": 65536,
+        "image_size": 256,
         "dataloader_opts": {
             "batch_size": 1,
-            "num_workers": 4
+            "num_workers": 0
         }
     }
 

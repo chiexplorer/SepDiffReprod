@@ -260,7 +260,8 @@ class ResBlock(TimestepBlock):
             h = in_conv(h)
         else:
             h = self.in_layers(x)
-        emb_out = self.emb_layers(emb).type(h.dtype)
+        emb_out = self.emb_layers(emb).type(h.dtype)  # 对emb编码，保证channel与输入一致
+        # 保证emb_out与输入的维数一致
         while len(emb_out.shape) < len(h.shape):
             emb_out = emb_out[..., None]
         if self.use_scale_shift_norm:
@@ -269,7 +270,7 @@ class ResBlock(TimestepBlock):
             h = out_norm(h) * (1 + scale) + shift
             h = out_rest(h)
         else:
-            h = h + emb_out
+            h = h + emb_out  # 融合emb
             h = self.out_layers(h)
         return self.skip_connection(x) + h
 
@@ -708,7 +709,7 @@ class UNetModel(nn.Module):
         self.middle_block.apply(convert_module_to_f32)
         self.output_blocks.apply(convert_module_to_f32)
 
-    def forward(self, x, timesteps=None, context=None, y=None,**kwargs):
+    def forward(self, x, timesteps=None, context=None, y=None, **kwargs):
         """
         Apply the model to an input batch.
         :param x: an [N x C x ...] Tensor of inputs.

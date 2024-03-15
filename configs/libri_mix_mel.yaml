@@ -17,28 +17,19 @@ model:
     conditioning_key: crossattn
     monitor: train_loss
     unet_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      target: ldm.modules.diffusionmodules.yangmodel.DiT
       params:
-        image_size: 32
+        input_size:
+        - 10
+        - 20
+        patch_size:
+        - 5
+        - 5
         in_channels: 256
-        out_channels: 256
-        model_channels: 128
-        attention_resolutions:
-        # note: this isn\t actually the resolution but
-        # the downsampling factor, i.e. this corresnponds to
-        # attention on spatial resolution 8,16,32, as the
-        # spatial reolution of the latents is 64 for f4
-        - 2
-        num_res_blocks: 2
-        channel_mult:
-        - 1
-        - 2
-        - 3
-        - 4
-        num_head_channels: 32
-        use_spatial_transformer: true
-        transformer_depth: 1
-        context_dim: 256
+        hidden_size: 768
+        depth: 12
+        num_heads: 12
+        custom_shape: True
     first_stage_config:
       target: ldm.models.autoencoder.VQModelInterface
       params:
@@ -76,7 +67,7 @@ data:
       target: ldm.data.librimix.LibriMixData
       params:
         config:
-          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/libri2mix_train-100-test.csv"
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_train-100.csv"
           use_mel_file: True
           orig_sample_rate: 16000
           sampling_rate: 22050
@@ -91,7 +82,7 @@ data:
       target: ldm.data.librimix.LibriMixData
       params:
         config:
-          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/libri2mix_dev-test.csv"
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_dev.csv"
           use_mel_file: True
           orig_sample_rate: 16000
           sampling_rate: 22050

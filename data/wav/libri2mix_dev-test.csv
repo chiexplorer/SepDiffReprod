@@ -1,0 +1,17 @@
+ID,duration,mix_wav,mix_wav_format,mix_wav_opts,s1_wav,s1_wav_format,s1_wav_opts,s2_wav,s2_wav_format,s2_wav_opts,noise_wav,noise_wav_format,noise_wav_opts
+
+0,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\mix_clean/1272-128104-0000_2035-147961-0014.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s1/1272-128104-0000_2035-147961-0014.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s2/1272-128104-0000_2035-147961-0014.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\noise/1272-128104-0000_2035-147961-0014.wav,wav,
+
+1,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\mix_clean/1272-128104-0003_2035-147961-0016.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s1/1272-128104-0003_2035-147961-0016.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s2/1272-128104-0003_2035-147961-0016.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\noise/1272-128104-0003_2035-147961-0016.wav,wav,
+
+2,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\mix_clean/1272-128104-0003_2803-154320-0000.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s1/1272-128104-0003_2803-154320-0000.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s2/1272-128104-0003_2803-154320-0000.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\noise/1272-128104-0003_2803-154320-0000.wav,wav,
+
+3,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\mix_clean/1272-128104-0005_3000-15664-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s1/1272-128104-0005_3000-15664-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s2/1272-128104-0005_3000-15664-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\noise/1272-128104-0005_3000-15664-0030.wav,wav,
+
+4,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\mix_clean/1272-128104-0006_2428-83699-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s1/1272-128104-0006_2428-83699-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s2/1272-128104-0006_2428-83699-0030.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\noise/1272-128104-0006_2428-83699-0030.wav,wav,
+
+5,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\mix_clean/1272-128104-0006_2428-83705-0022.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s1/1272-128104-0006_2428-83705-0022.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s2/1272-128104-0006_2428-83705-0022.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\noise/1272-128104-0006_2428-83705-0022.wav,wav,
+
+6,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\mix_clean/1272-128104-0006_5536-43363-0010.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s1/1272-128104-0006_5536-43363-0010.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s2/1272-128104-0006_5536-43363-0010.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\noise/1272-128104-0006_5536-43363-0010.wav,wav,
+
+7,1.0,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\mix_clean/1272-128104-0007_652-130726-0020.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s1/1272-128104-0007_652-130726-0020.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\s2/1272-128104-0007_652-130726-0020.wav,wav,,H:\exp\dataset\LibriMix\Libri2Mix\wav16k/min/dev\noise/1272-128104-0007_652-130726-0020.wav,wav,
