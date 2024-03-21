@@ -63,7 +63,6 @@ def get_parser(**parser_kwargs):
         "-t",
         "--train",
         type=str2bool,
-        const=True,
         default=False,
         nargs="?",
         help="train",
@@ -71,7 +70,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument(
         "--no-test",
         type=str2bool,
-        const=True,
         default=False,
         nargs="?",
         help="disable test",
@@ -115,9 +113,14 @@ def get_parser(**parser_kwargs):
         "--scale_lr",
         type=str2bool,
         nargs="?",
-        const=True,
         default=True,
         help="scale base-lr by ngpu * batch_size * n_accumulate",
+    )
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        default="",
+        help="dir path to save .npy files",
     )
     return parser
 
@@ -216,14 +219,10 @@ class DataModuleFromConfig(pl.LightningDataModule):
                           shuffle=shuffle)
 
     def _test_dataloader(self, shuffle=False):
-        is_iterable_dataset = isinstance(self.datasets['train'], Txt2ImgIterableBaseDataset)
-        if is_iterable_dataset or self.use_worker_init_fn:
+        if self.use_worker_init_fn:
             init_fn = worker_init_fn
         else:
             init_fn = None
-
-        # do not shuffle dataloader for iterable dataset
-        shuffle = shuffle and (not is_iterable_dataset)
 
         return DataLoader(self.datasets["test"], batch_size=self.batch_size,
                           num_workers=self.num_workers, worker_init_fn=init_fn, shuffle=shuffle)
@@ -405,6 +404,72 @@ class ImageLogger(Callback):
             if (pl_module.calibrate_grad_norm and batch_idx % 25 == 0) and batch_idx > 0:
                 self.log_gradients(trainer, pl_module, batch_idx=batch_idx)
 
+
+class NpyLogger(Callback):
+    def __init__(self, batch_frequency, max_images, save_path="./", clamp=True, increase_log_steps=True,
+                 rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
+                 log_images_kwargs=None):
+        super().__init__()
+        self.batch_freq = batch_frequency
+        self.max_images = max_images
+        self.clamp = clamp
+        self.rescale = rescale
+        self.save_path = save_path
+        self.log_images_kwargs = log_images_kwargs if log_images_kwargs else {}
+
+    @rank_zero_only
+    def log_local(self, save_dir, split, images,
+                  global_step, current_epoch, batch_idx, wav_names, mel_min=-11.5129, mel_max=1.0908):
+        """
+        :desc: 保存log npy files到指定文件夹
+        """
+        # 将images内的npy保存到对应路径下
+        for k in images:
+            # batch_size拆分为单个图片
+            for i, image in enumerate(images[k]):
+                npy = image.numpy()
+                if self.rescale:
+                    npy = (npy + 1.0) / 2.0  # -1,1 -> 0,1
+                    npy = npy * (mel_max - mel_min) + mel_min  # 还原到 log mel spec的分布
+                filename = "{}.npy".format(wav_names[i])
+                path = os.path.join(save_dir, filename)
+                os.makedirs(os.path.split(path)[0], exist_ok=True)
+                np.save(path, npy)
+
+    def log_npy(self, pl_module, batch, batch_idx, split="test", ):
+        is_train = pl_module.training
+        if is_train:
+            pl_module.eval()
+
+        # 以eval模式产生要log的npy文件
+        with torch.no_grad():
+            # 令N与条件个数相同
+            b_key = list(batch.keys())[0]
+            cond_num = None
+            if isinstance(batch[b_key], torch.Tensor):
+                cond_num = batch[b_key].shape[0]
+            elif isinstance(batch[b_key], list):
+                cond_num = len(batch[b_key])
+            self.log_images_kwargs['N'] = cond_num if cond_num is not None else self.log_images_kwargs.N
+            images = pl_module.log_npy(batch, **self.log_images_kwargs)
+        # 裁剪并转换格式
+        for k in images:
+            # 裁剪到N张图片
+            N = min(images[k].shape[0], self.max_images)
+            images[k] = images[k][:N]
+            if isinstance(images[k], torch.Tensor):  # 解绑并clamp
+                images[k] = images[k].detach().cpu()
+                if self.clamp:
+                    images[k] = torch.clamp(images[k], -1., 1.)
+        # 存到本地指定路径下
+        self.log_local(self.save_path, split, images,
+                       pl_module.global_step, pl_module.current_epoch, batch_idx, wav_names=batch['path'])
+
+        if is_train:
+            pl_module.train()
+
+    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+        self.log_npy(pl_module, batch, batch_idx, split="test")
 
 class CUDACallback(Callback):
     # see https://github.com/SeanNaren/minGPT/blob/master/mingpt/callback.py
@@ -607,7 +672,7 @@ if __name__ == "__main__":
         # add callback which sets up log directory
         default_callbacks_cfg = {
             "setup_callback": {
-                "target": "main.SetupCallback",
+                "target": "test.SetupCallback",
                 "params": {
                     "resume": opt.resume,
                     "now": now,
@@ -619,22 +684,31 @@ if __name__ == "__main__":
                 }
             },
             "image_logger": {
-                "target": "main.ImageLogger",
+                "target": "test.ImageLogger",
                 "params": {
                     "batch_frequency": 500,  # 500
                     "max_images": 1,
                     "clamp": True
                 }
             },
+            "npy_logger": {
+              "target": "test.NpyLogger",
+                "params": {
+                    "batch_frequency": 1,
+                    "max_images": 1,
+                    "save_path": opt.save_dir,
+                    "clamp": True
+                }
+            },
             "learning_rate_logger": {
-                "target": "main.LearningRateMonitor",
+                "target": "test.LearningRateMonitor",
                 "params": {
                     "logging_interval": "step",
                     # "log_momentum": True
                 }
             },
             "cuda_callback": {
-                "target": "main.CUDACallback"
+                "target": "test.CUDACallback"
             },
         }
         if version.parse(pl.__version__) >= version.parse('1.4.0'):
@@ -673,27 +747,18 @@ if __name__ == "__main__":
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir
 
-        tmp_mode = 'normal'  # 通常为'normal', 'cifar10'为临时添加的CIFAR10支持
-        if tmp_mode == "normal":
-            # data
-            data = instantiate_from_config(config.data)
-            # data.prepare_data()
-            data.setup()
-            print("#### Data #####")
-            for k in data.datasets:
-                print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
-        elif tmp_mode == 'cifar10':
-            from torchvision.datasets import CIFAR10
-            from torchvision import transforms
-            dataset = CIFAR10(
-                root='save/CIFAR10', train=True, download=True,
-                transform=transforms.Compose([
-                    transforms.RandomHorizontalFlip(),
-                    transforms.ToTensor(),
-                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                ]))
-            data = DataLoader(
-                dataset, batch_size=64, num_workers=0, shuffle=True, drop_last=True, pin_memory=True)
+        # 若为test模式，不加载训练集和测试集
+        if not opt.train:
+            config.data.params.train = None
+            config.data.params.validation = None
+        # data
+        data = instantiate_from_config(config.data)
+        data.prepare_data()
+        data.setup()
+        print("#### Data #####")
+        for k in data.datasets:
+            print(f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}")
+
 
         # configure learning rate
         bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate

@@ -120,6 +120,7 @@ def checkpoint(func, inputs, params, flag):
 class CheckpointFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, run_function, length, *args):
+        # 存储反传时需要的方法、入参和模块参数
         ctx.run_function = run_function
         ctx.input_tensors = list(args[:length])
         ctx.input_params = list(args[length:])
@@ -130,13 +131,25 @@ class CheckpointFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, *output_grads):
-        ctx.input_tensors = [x.detach().requires_grad_(True) for x in ctx.input_tensors]
+        """
+        重新定义反传梯度的计算过程
+        :param ctx: 缓存的上下文
+        :param output_grads: 捕获的计算图下一层的梯度
+        :return: 手动修改过的梯度
+        """
+        # 从入参中分离梯度，同时开启梯度计算
+        ctx.input_tensors = [x.detach().requires_grad_(True) if x is not None else x for x in ctx.input_tensors]
+        # 以grad模式重新计算output_tensors
         with torch.enable_grad():
             # Fixes a bug where the first op in run_function modifies the
             # Tensor storage in place, which is not allowed for detach()'d
             # Tensors.
-            shallow_copies = [x.view_as(x) for x in ctx.input_tensors]
+            shallow_copies = [x.view_as(x) if x is not None else x for x in ctx.input_tensors]
             output_tensors = ctx.run_function(*shallow_copies)
+        # 健身，去除可能为None的输入
+        param_num = len(ctx.input_tensors) + len(ctx.input_params)
+        ctx.input_tensors = [x for x in ctx.input_tensors if x is not None]
+        # 根据output_grads计算入参和模型参数的梯度
         input_grads = torch.autograd.grad(
             output_tensors,
             ctx.input_tensors + ctx.input_params,
@@ -146,7 +159,11 @@ class CheckpointFunction(torch.autograd.Function):
         del ctx.input_tensors
         del ctx.input_params
         del output_tensors
-        return (None, None) + input_grads
+        # 仅考虑第二个入参条件为None的情形
+        if param_num > len(input_grads):
+            return (None, None) + input_grads[0:1] + (None, ) + input_grads[1:]
+        else:
+            return (None, None) + input_grads
 
 
 def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):

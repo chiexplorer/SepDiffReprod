@@ -1,0 +1,11 @@
+ID,duration,mix_wav,mix_wav_format,mix_wav_opts,s1_wav,s1_wav_format,s1_wav_opts,s2_wav,s2_wav_format,s2_wav_opts,noise_wav,noise_wav_format,noise_wav_opts
+
+0,1.0,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\mix_clean/1089-134686-0000_121-127105-0031.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s1/1089-134686-0000_121-127105-0031.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s2/1089-134686-0000_121-127105-0031.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\noise/1089-134686-0000_121-127105-0031.npy,wav,
+
+1,1.0,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\mix_clean/1089-134686-0000_260-123440-0016.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s1/1089-134686-0000_260-123440-0016.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s2/1089-134686-0000_260-123440-0016.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\noise/1089-134686-0000_260-123440-0016.npy,wav,
+
+2,1.0,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\mix_clean/1089-134686-0000_61-70968-0047.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s1/1089-134686-0000_61-70968-0047.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s2/1089-134686-0000_61-70968-0047.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\noise/1089-134686-0000_61-70968-0047.npy,wav,
+
+3,1.0,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\mix_clean/1089-134686-0002_7729-102255-0037.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s1/1089-134686-0002_7729-102255-0037.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s2/1089-134686-0002_7729-102255-0037.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\noise/1089-134686-0002_7729-102255-0037.npy,wav,
+
+4,1.0,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\mix_clean/1089-134686-0004_1284-1180-0027.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s1/1089-134686-0004_1284-1180-0027.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\s2/1089-134686-0004_1284-1180-0027.npy,wav,,H:\exp\dataset\LibriMixAligned\Libri2Mix\wav16k/min/test\noise/1089-134686-0004_1284-1180-0027.npy,wav,

@@ -40,11 +40,11 @@ class LambdaWarmUpCosineScheduler2:
     """
     def __init__(self, warm_up_steps, f_min, f_max, f_start, cycle_lengths, verbosity_interval=0):
         assert len(warm_up_steps) == len(f_min) == len(f_max) == len(f_start) == len(cycle_lengths)
-        self.lr_warm_up_steps = warm_up_steps
-        self.f_start = f_start
-        self.f_min = f_min
-        self.f_max = f_max
-        self.cycle_lengths = cycle_lengths
+        self.lr_warm_up_steps = warm_up_steps  # 热身步数
+        self.f_start = f_start  # 起始lr
+        self.f_min = f_min  # 最小lr
+        self.f_max = f_max  # 最大lr
+        self.cycle_lengths = cycle_lengths  #
         self.cum_cycles = np.cumsum([0] + list(self.cycle_lengths))
         self.last_f = 0.
         self.verbosity_interval = verbosity_interval
@@ -96,3 +96,28 @@ class LambdaLinearScheduler(LambdaWarmUpCosineScheduler2):
             self.last_f = f
             return f
 
+
+if __name__ == '__main__':
+    import matplotlib.pyplot as plt
+
+    # 定义学习率调度器对象
+    scheduler = LambdaWarmUpCosineScheduler(
+        warm_up_steps=1000,
+        verbosity_interval=0,
+        max_decay_steps=80000,
+        lr_start=0.0001,
+        lr_max=0.0002,
+        lr_min=0.00001
+    )
+
+    # 计算学习率变化曲线
+    num_steps = 90000  # 步数
+    lr_values = [scheduler(n) for n in range(num_steps)]
+
+    # 绘制学习率变化曲线图
+    plt.plot(range(num_steps), lr_values)
+    plt.xlabel('Step')
+    plt.ylabel('Learning Rate')
+    plt.title('Learning Rate Schedule')
+    plt.grid(True)
+    plt.show()

@@ -221,7 +221,7 @@ class DiT(nn.Module):
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
         # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)  # 不需要类编码器了
-        # 临时，mix mel spec在W维度拼接时可用
+        # 临时，编码mix mel spec以在W维度拼接时可用
         self.y_embedder = PatchEmbed((input_size[0] / 2, input_size[1]),
                                      patch_size, in_channels, hidden_size, bias=True)
         num_patches = self.x_embedder.num_patches
@@ -234,7 +234,7 @@ class DiT(nn.Module):
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        # self.initialize_weights()  # 临时注释掉
+        self.initialize_weights()
 
     def initialize_weights(self):
         # Initialize transformer layers:

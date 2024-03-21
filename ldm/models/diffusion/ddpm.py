@@ -57,6 +57,7 @@ class DDPM(pl.LightningModule):
                  use_ema=True,
                  first_stage_key="image",
                  image_size=256,
+                 image_size_h=None,
                  channels=3,
                  log_every_t=100,
                  clip_denoised=True,
@@ -83,6 +84,7 @@ class DDPM(pl.LightningModule):
         self.log_every_t = log_every_t
         self.first_stage_key = first_stage_key
         self.image_size = image_size  # try conv?
+        self.image_size_h = image_size_h  # 临时增加，图片高度
         self.channels = channels
         self.use_positional_encodings = use_positional_encodings
         self.model = DiffusionWrapper(unet_config, conditioning_key)
@@ -270,8 +272,9 @@ class DDPM(pl.LightningModule):
     @torch.no_grad()
     def sample(self, batch_size=16, return_intermediates=False):
         image_size = self.image_size
+        image_size_h = self.image_size_h if self.image_size_h is not None else image_size
         channels = self.channels
-        return self.p_sample_loop((batch_size, channels, image_size, image_size),
+        return self.p_sample_loop((batch_size, channels, image_size, image_size_h),
                                   return_intermediates=return_intermediates)
 
     def q_sample(self, x_start, t, noise=None):
@@ -319,7 +322,7 @@ class DDPM(pl.LightningModule):
 
         loss = loss_simple + self.original_elbo_weight * loss_vlb
 
-        loss_dict.update({f'{log_prefix}/loss': loss})
+        loss_dict.update({f'{log_prefix}_loss': loss})
 
         return loss, loss_dict
 
@@ -371,6 +374,12 @@ class DDPM(pl.LightningModule):
             loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
         self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
         self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+
+    @torch.no_grad()
+    def test_step(self, batch, batch_idx):
+        pass
+
+
 
     def on_train_batch_end(self, *args, **kwargs):
         if self.use_ema:
@@ -1006,8 +1015,8 @@ class DDPMCustom(pl.LightningModule):
                       logger=True, on_step=True, on_epoch=True)
         # self.log("train_loss", loss, prog_bar=True,
         #               logger=True, on_step=True, on_epoch=True)
-        # self.log("global_step", self.global_step,
-        #          prog_bar=True, logger=True, on_step=True, on_epoch=False)
+        self.log("global_step", self.global_step,
+                 prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
         if self.use_scheduler:
             lr = self.optimizers().param_groups[0]['lr']
@@ -1756,7 +1765,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError()
 
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
-        loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
+        loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})  # l_simple
 
         self.logvar = self.logvar.to(self.device)  # 修正代码 设备不一致错误
         logvar_t = self.logvar[t].to(self.device)
@@ -1770,9 +1779,9 @@ class LatentDiffusion(DDPM):
 
         loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
         loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
-        loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+        loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})  # l_vlb
         loss += (self.original_elbo_weight * loss_vlb)
-        loss_dict.update({f'{prefix}_loss': loss})
+        loss_dict.update({f'{prefix}_loss': loss})  # total loss
 
         return loss, loss_dict
 
@@ -1950,7 +1959,8 @@ class LatentDiffusion(DDPM):
                verbose=True, timesteps=None, quantize_denoised=False,
                mask=None, x0=None, shape=None,**kwargs):
         if shape is None:
-            shape = (batch_size, self.channels, self.image_size, self.image_size)
+            image_size_h = self.image_size_h if self.image_size_h is not None else self.image_size
+            shape = (batch_size, self.channels, self.image_size, image_size_h)
         if cond is not None:
             if isinstance(cond, dict):
                 cond = {key: cond[key][:batch_size] if not isinstance(cond[key], list) else
@@ -1968,7 +1978,8 @@ class LatentDiffusion(DDPM):
 
         if ddim:
             ddim_sampler = DDIMSampler(self)
-            shape = (self.channels, self.image_size, self.image_size)
+            image_size_h = self.image_size_h if self.image_size_h is not None else self.image_size
+            shape = (self.channels, self.image_size, image_size_h)
             samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
                                                         shape,cond,verbose=False,**kwargs)
 
@@ -1981,8 +1992,8 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def log_images(self, batch, N=8, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
-                   quantize_denoised=True, inpaint=True, plot_denoise_rows=False, plot_progressive_rows=True,
-                   plot_diffusion_rows=True, **kwargs):
+                   quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
+                   plot_diffusion_rows=False, **kwargs):
         """
         :desc: 记录图片、条件、扩散过程、采样过程
         :param batch: 当前batch
@@ -2009,7 +2020,7 @@ class LatentDiffusion(DDPM):
             for i, k in enumerate(self.first_stage_key):
                 # input = self.get_input(batch, k, )
                 # 依次为 样本编码、条件编码、原始样本、样本解码、原始条件
-                z_per, c, x_per, xrec_per, xc = self.get_input(batch, self.first_stage_key,
+                z_per, c, x_per, xrec_per, xc = self.get_input(batch, k,
                                                    return_first_stage_outputs=True,
                                                    force_c_encode=True,
                                                    return_original_cond=True,
@@ -2118,12 +2129,58 @@ class LatentDiffusion(DDPM):
         # 绘制过程
         if plot_progressive_rows:
             with self.ema_scope("Plotting Progressives"):
+                image_size_h = self.image_size_h if self.image_size_h is not None else self.image_size
                 img, progressives = self.progressive_denoising(c,
-                                                               shape=(self.channels, self.image_size, self.image_size),
+                                                               shape=(self.channels, self.image_size, image_size_h),
                                                                batch_size=N)
             prog_row = self._get_denoise_row_from_list(progressives, desc="Progressive Generation")
             log["progressive_row"] = prog_row  # 绘制
 
+        # 是否指定需要返回的key
+        if return_keys:
+            if np.intersect1d(list(log.keys()), return_keys).shape[0] == 0:
+                return log
+            else:
+                return {key: log[key] for key in return_keys}
+        return log
+
+    @torch.no_grad()
+    def log_npy(self, batch, N=8, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None, ):
+        use_ddim = ddim_steps is not None
+        log = dict()
+        if isinstance(self.first_stage_key, omegaconf.listconfig.ListConfig):
+            # 在W维度拼接源
+            for i, k in enumerate(self.first_stage_key):
+                # input = self.get_input(batch, k, )
+                # 依次为 样本编码、条件编码、原始样本、样本解码
+                z_per, c, x_per, xrec_per = self.get_input(batch, k,
+                                                   return_first_stage_outputs=True,
+                                                   force_c_encode=True,
+                                                   return_original_cond=False,
+                                                   bs=N, only_x=i != 0)
+                if i == 0:
+                    z = z_per
+                    x = x_per
+                    xrec = xrec_per
+                else:
+                    z = torch.cat([z, z_per], dim=2)
+                    x = torch.cat([x, x_per], dim=2)
+                    xrec = torch.cat([xrec, xrec_per], dim=2)
+        else:
+            z, c, x, xrec = self.get_input(batch, self.first_stage_key,
+                                               return_first_stage_outputs=True,
+                                               force_c_encode=True,
+                                               return_original_cond=False,
+                                               bs=N)
+        # 采样
+        if sample:
+            # get denoise row
+            with self.ema_scope("Plotting"):
+                samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
+                                                         ddim_steps=ddim_steps,eta=ddim_eta)
+                # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True)
+            x_samples = self.decode_first_stage(samples)
+            log["samples"] = x_samples
         # 是否指定需要返回的key
         if return_keys:
             if np.intersect1d(list(log.keys()), return_keys).shape[0] == 0:
@@ -2153,7 +2210,8 @@ class LatentDiffusion(DDPM):
                     'scheduler': LambdaLR(opt, lr_lambda=scheduler.schedule),
                     'interval': 'step',
                     'frequency': 1
-                }]
+                }
+            ]
             return [opt], scheduler
         return opt
 
