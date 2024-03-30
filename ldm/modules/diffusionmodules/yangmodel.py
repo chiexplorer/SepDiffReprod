@@ -160,6 +160,41 @@ class DiTBlock(nn.Module):
         x = x + self.mlp(self.norm3(x))
         return x
 
+class DiTBlockE2E(nn.Module):
+    """
+    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    """
+    def __init__(self, hidden_size, num_heads=-1, dim_head=-1, mlp_ratio=4.0, dropout=0., context_dim=None, **block_kwargs):
+        super().__init__()
+        if num_heads == -1:  # 检查多头attn的必须参数
+            assert dim_head != -1, 'Either num_heads or dim_head has to be set'
+        if dim_head == -1:
+            assert num_heads != -1, 'Either num_heads or dim_head has to be set'
+        # 自动确定多头attn的参数
+        if dim_head == -1:
+            dim_head = hidden_size // num_heads
+        else:
+            num_heads = hidden_size // dim_head  # 注意力头数
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        # self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
+        # self.attn = SpatialTransformer(in_channels=hidden_size, n_heads=num_heads, d_head=dim_head, **block_kwargs)  # 使用cross-attn替代原attn
+        self.attn = BasicTransformerBlock(dim=hidden_size, n_heads=num_heads, d_head=dim_head,
+                                          dropout=dropout, context_dim=context_dim)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.norm3 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+
+    def forward(self, x, c):
+        # shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+        # x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        # x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        x = x + self.attn(self.norm1(x))  # ln, self-attn
+        x = x + self.attn(self.norm2(x), c)  # ln, cross-attn
+        x = x + self.mlp(self.norm3(x))
+        return x
+
 
 class FinalLayer(nn.Module):
     """
@@ -173,6 +208,33 @@ class FinalLayer(nn.Module):
         elif isinstance(patch_size, tuple) or isinstance(patch_size, list) or isinstance(patch_size, ListConfig):
             out_dim = patch_size[0] * patch_size[1] * out_channels
         self.linear = nn.Linear(hidden_size, out_dim, bias=True)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 2 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, c):
+        # 若c是二维形式
+        if len(c.shape) == 3:
+            shift, scale = self.adaLN_modulation(c).chunk(2, dim=2)  # 在最后一个维度拆分
+            x = modulate_yang(self.norm_final(x), shift, scale)  # 均值&方差和x同shape
+        elif len(c.shape) == 2:
+            shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)  # 原代码
+            x = modulate(self.norm_final(x), shift, scale)
+        else:
+            raise ValueError(f"Num of dim(dim={len(c.shape)}) about c is not supported.")
+
+        x = self.linear(x)
+        return x
+
+class FinalLayerE2E(nn.Module):
+    """
+    The final layer of DiT.
+    """
+    def __init__(self, hidden_size, out_size):
+        super().__init__()
+        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.linear = nn.Linear(hidden_size, out_size, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)
@@ -220,10 +282,13 @@ class DiT(nn.Module):
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)  # 不需要类编码器了
-        # 临时，编码mix mel spec以在W维度拼接时可用
-        self.y_embedder = PatchEmbed((input_size[0] / 2, input_size[1]),
-                                     patch_size, in_channels, hidden_size, bias=True)
+        if custom_shape:
+            # 编码mix mel spec以在W维度拼接时可用
+            self.y_embedder = PatchEmbed((input_size[0] / 2, input_size[1]),
+                                         patch_size, in_channels, hidden_size, bias=True)
+        else:
+            self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)  # 不需要类编码器了
+
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         # patch位置编码, shape (1, grid[0]*grid[1], hidden_size)
@@ -234,7 +299,7 @@ class DiT(nn.Module):
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        self.initialize_weights()
+        # self.initialize_weights()
 
     def initialize_weights(self):
         # Initialize transformer layers:
@@ -320,15 +385,147 @@ class DiT(nn.Module):
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)                   # (N, D)
         t = torch.unsqueeze(t, dim=1)  # 临时 保证t和y可加，但未思考其意义
-        # context = self.y_embedder(context, self.training)    # (N, D)
-        context = self.y_embedder(context) + self.y_pos_embed   # (N, T_c, D)
-        c = t + context                                # (N, D)
+        if self.custom_shape:
+            context = self.y_embedder(context) + self.y_pos_embed   # (N, T_c, D)
+        else:
+            context = self.y_embedder(context, self.training)    # (N, D)
+
+        c = t + context  # (N, D)
         for block in self.blocks:
-            x = block(x, c)                      # (N, T, D)
-        # 临时 将c在dim=1处复制一份，保证FinalLayer的adaLN 可用
-        c = torch.cat((c, c), dim=1)
+            x = block(x, c)  # (N, T, D)
+        if self.custom_shape:
+            # 临时 将c在dim=1处复制一份，保证FinalLayer的adaLN 可用
+            c = torch.cat((c, c), dim=1)
         x = self.final_layer(x, c)               # (N, T, patch_size ** 2 * out_channels)
         x = self.unpatchify(x)                   # (N, out_channels, H, W)
+        return x
+
+    def forward_with_cfg(self, x, t, context, cfg_scale):
+        """
+        Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
+        """
+        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
+        half = x[: len(x) // 2]
+        combined = torch.cat([half, half], dim=0)
+        model_out = self.forward(combined, t, context)
+        # For exact reproducibility reasons, we apply classifier-free guidance on only
+        # three channels by default. The standard approach to cfg applies it to all channels.
+        # This can be done by uncommenting the following line and commenting-out the line following that.
+        # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
+        eps, rest = model_out[:, :3], model_out[:, 3:]
+        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
+        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+        eps = torch.cat([half_eps, half_eps], dim=0)
+        return torch.cat([eps, rest], dim=1)
+
+class DiTE2E(nn.Module):
+    """ Diffusion model with a Transformer backbone. """
+    def __init__(
+        self,
+        input_size=257,
+        in_channels=4,
+        hidden_size=1152,
+        emb_dim=256,
+        depth_t=4,
+        depth=28,
+        num_heads=16,
+        mlp_ratio=4.0,
+        class_dropout_prob=0.1,
+        num_classes=1000,
+        learn_sigma=False,
+        custom_shape=False,
+    ):
+        super().__init__()
+        self.learn_sigma = learn_sigma
+        self.in_channels = in_channels
+        self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.input_size = input_size  # 输入长度
+        self.emb_dim = emb_dim  # 输出编码长度
+        self.num_heads = num_heads
+        self.custom_shape = custom_shape  # 扩展到宽高比不固定的情形
+        self.x_embedder = nn.Linear(input_size, hidden_size, bias=True)
+        # self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
+        # self.x_embedder = nn.Conv1d(in_channels, hidden_size, kernel_size=1, stride=1, padding=0)
+        self.t_embedder = TimestepEmbedder(hidden_size)
+        # self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)  # 不需要类编码器了
+        # 临时，编码mix mel spec以在W维度拼接时可用
+        # self.y_embedder = PatchEmbed((input_size[0] / 2, input_size[1]),
+        #                              patch_size, in_channels, hidden_size, bias=True)
+        # self.y_embedder = nn.Conv1d(in_channels//2, hidden_size//2, kernel_size=1, stride=1, padding=0)
+        self.y_embedder = nn.Linear(input_size, hidden_size, bias=True)
+        # Will use fixed sin-cos embedding:
+        # token位置编码, shape (1, in_channels, input_size)
+        self.pos_embed = nn.Parameter(torch.zeros(1, in_channels, hidden_size), requires_grad=False)
+        self.y_pos_embed = nn.Parameter(torch.zeros(1, in_channels//2, hidden_size), requires_grad=False)  # y的位置编码
+        self.blocks_t = nn.ModuleList([
+            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth_t)
+        ])  # 时间步融合crossAttn
+        self.blocks = nn.ModuleList([
+            DiTBlockE2E(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+        ])  # 条件融合crossAttn
+        # self.final_layer = FinalLayerE2E(hidden_size, input_size)  // 原final layer
+        self.final_layer = nn.Linear(hidden_size, input_size, bias=True)
+        self.activate = nn.Sigmoid()
+        # self.initialize_weights()
+
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+        # 初始化所有线性层，令：weight—Xavier 均匀分布，bias—全零值
+        self.apply(_basic_init)
+
+        # Initialize (and freeze) pos_embed by sin-cos embedding:
+        pos_embed = get_1d_sincos_pos_embed_from_grid(self.pos_embed.shape[-1], np.arange(self.pos_embed.shape[-2], dtype=np.float32))
+        y_pos_embed = get_1d_sincos_pos_embed_from_grid(self.pos_embed.shape[-1], np.arange(self.pos_embed.shape[-2]//2, dtype=np.float32))
+        self.y_pos_embed.data.copy_(torch.from_numpy(y_pos_embed).float().unsqueeze(0))
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+
+        # # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
+        # w = self.x_embedder.proj.weight.data
+        # nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        # nn.init.constant_(self.x_embedder.proj.bias, 0)
+
+        # Initialize label embedding table:
+        # nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+        # # Zero-out adaLN modulation layers in DiT blocks:
+        # for block in self.blocks:
+        #     nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+        #     nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+
+        # # Zero-out output layers:
+        # nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        # nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        # nn.init.constant_(self.final_layer.linear.weight, 0)
+        # nn.init.constant_(self.final_layer.linear.bias, 0)
+
+    def forward(self, x, t, context):
+        """
+        Forward pass of DiT.
+        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
+        t: (N,) tensor of diffusion timesteps
+        context: (N,) tensor of context condition
+        """
+        x = self.x_embedder(x)  # (N, T, D), where T = H * W / patch_size ** 2
+        t = self.t_embedder(t)  # (N, D)
+        t = torch.unsqueeze(t, dim=1)  # 临时 保证t和y可加，但未思考其意义
+        # context = self.y_embedder(context, self.training)    # (N, D)
+        context = self.y_embedder(context)   # (N, T_c, D)
+
+        for block in self.blocks_t:
+            x = block(x, t) # (N, T, D)
+        for block in self.blocks:
+            x = block(x, context)  # (N, T, D)
+        x = self.activate(x)
+        x = self.final_layer(x)  # (N, T, patch_size ** 2 * out_channels)
         return x
 
     def forward_with_cfg(self, x, t, context, cfg_scale):
@@ -404,19 +601,6 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
     return emb
 
-def get_2d_sincos_pos_embed_from_grid_yang(embed_dim, grid):
-    """ 根据坐标集grid和码字字长embed_dim生成位置编码, 扩展至宽高不一致的情形 """
-    assert embed_dim % 2 == 0
-    assert embed_dim
-
-    # use half of dimensions to encode grid_h
-    # 长，宽各用一半的码字
-    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
-    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
-
-    emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
-    return emb
-
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
     embed_dim: output dimension for each position
@@ -441,6 +625,9 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
 
 if __name__ == '__main__':
+    from torchinfo import summary
+    import netron
+    import torch.onnx
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # # # PatchEmbed测试
@@ -469,25 +656,43 @@ if __name__ == '__main__':
     # h = block(x, c)
     # print(h.shape)
 
-    # # # DIT测试
-    # x = torch.randn(2, 256, 10, 20)
+    # # # DIT测试——原始配置
+    # x = torch.randn(2, 3, 224, 224)
     # t = torch.randint(0, 1000, (2, )).to(device)
     # y = torch.randint(0, 1000, (2, )).to(device)
     # x = x.to(device)
-    # model = DiT(input_size=(10, 20), patch_size=(5, 5), in_channels=256, hidden_size=768, depth=12, num_heads=12)
+    # model = DiT(input_size=224, patch_size=16, in_channels=3, hidden_size=1024, depth=12, num_heads=12)
     # model.cuda()
     # outputs = model(x, t, y)
     # pred, _ = torch.split(outputs, x.shape[1], dim=1)
     # print(pred.shape)
 
-    # # DIT测试——模仿UNet的输入
-    x = torch.randn(2, 256, 10, 20)
+    # # # DIT测试——模仿UNet的输入
+    # x = torch.randn(2, 256, 10, 20)
+    # t = torch.randint(0, 1000, (2, )).to(device)
+    # y = torch.randint(0, 1000, (2, )).to(device)
+    # c = torch.randn(2, 256, 5, 20).to(device)  # mel 条件
+    # x = x.to(device)
+    # model = DiT(input_size=(10, 20), patch_size=(5, 5), in_channels=256, hidden_size=768, depth=12, num_heads=12, custom_shape=True)
+    # model.cuda()
+    # outputs = model(x, t, c)
+    # pred = outputs
+    # print(pred.shape)
+
+    # # DIT测试——E2E测试
+    input_size = 300
+    x = torch.randn(2, 16, input_size).to(device)
     t = torch.randint(0, 1000, (2, )).to(device)
-    y = torch.randint(0, 1000, (2, )).to(device)
-    c = torch.randn(2, 256, 5, 20).to(device)  # mel 条件
-    x = x.to(device)
-    model = DiT(input_size=(10, 20), patch_size=(5, 5), in_channels=256, hidden_size=768, depth=12, num_heads=12, custom_shape=True)
+    y = torch.randn(2, 8, input_size).to(device)
+    # c = torch.randn(2, 256, 5, 20).to(device)  # mel 条件
+    model = DiTE2E(input_size=input_size, in_channels=16, hidden_size=768, depth=12, num_heads=12, custom_shape=False)
+    # summary(model, input_size=((2, 16, 257),(2, ), (2, 8, 257)))  # , mode="train"
     model.cuda()
-    outputs = model(x, t, c)
+    outputs = model(x, t, y)
     pred = outputs
     print(pred.shape)
+
+    # netron可视化
+    # modelData = "./DiTE2E.pth"
+    # torch.onnx.export(model, (x, t, y), modelData)
+    # netron.start(modelData)

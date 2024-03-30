@@ -20,7 +20,8 @@ from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
 # from pytorch_lightning.utilities.distributed import rank_zero_only # 旧版本写法
 
-from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
+from ldm.util import (log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params,
+                      instantiate_from_config, get_obj_from_str)
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
@@ -42,6 +43,36 @@ def disabled_train(self, mode=True):
 def uniform_on_device(r1, r2, shape, device):
     return (r1 - r2) * torch.rand(*shape, device=device) + r2
 
+def norm_min_max(x, minV, maxV):
+    """
+        将x值域通过min-max标准化到值域[-1, 1]内
+    """
+    # min-max -> [0, 1]
+    x = (x - minV) / (maxV - minV)
+    # # --- /mu norm -> [-1, 1]
+    # mean = (maxV + minV) / 2
+    # x = x - mean  # 减去区间均值
+    # x = x / mean  # 归一化
+    # # --- min-max -> [-1, 1]
+    # x = (x - minV) / (maxV - minV)  # min-max标准化
+    # torch.clamp(x, min=0, max=1)  # 钳位
+    # x = 2 * x - 1  # 值域缩放到[-1, 1]
+    return x
+
+def norm_min_max_inv(x, minV, maxV):
+    """
+        将x值域从NN输出逆标准化到值域[minV, maxV]
+    """
+    # min-max -> [0, 1]
+    x = x * (maxV - minV) + minV
+    # # --- /mu norm -> [-1, 1]
+    # mean = (maxV + minV) / 2
+    # x = x * mean  # 归一化
+    # x = x + mean  # 减去区间均值
+    # # --- min-max -> [-1, 1]
+    # x = (x + 1) / 2  # [0, 1]
+    # x = x * (maxV - minV) + minV  # 逆min-max标准化
+    return x
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -340,8 +371,8 @@ class DDPM(pl.LightningModule):
         :return:
         """
         x = batch[k]
-        if len(x.shape) == 3:
-            x = x[..., None]
+        # if len(x.shape) == 3:
+        #     x = x[..., None]
         # x = rearrange(x, 'b h w c -> b c h w')  # 源代码有，但librimix不需要
         x = x.to(memory_format=torch.contiguous_format).float()
         return x
@@ -1134,6 +1165,10 @@ class LatentDiffusion(DDPM):
                  conditioning_key=None,
                  scale_factor=1.0,
                  scale_by_std=False,
+                 e2e=False,
+                 concat_dim=2,
+                 rescale_latent=False,
+                 no_encode_source=False,
                  *args, **kwargs):
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
         self.scale_by_std = scale_by_std
@@ -1149,6 +1184,10 @@ class LatentDiffusion(DDPM):
         self.concat_mode = concat_mode
         self.cond_stage_trainable = cond_stage_trainable
         self.cond_stage_key = cond_stage_key
+        self.e2e = e2e  # 是否以端到端模式工作(Encodec为编解码器)
+        self.concat_dim = concat_dim  # 源拼接的维度
+        self.rescale_latent = rescale_latent  # 是否对latent space输入后做标准化
+        self.no_encode_source = no_encode_source  # 是否不执行编码(假设loader已经编码了)
         try:
             self.num_downs = len(first_stage_config.params.ddconfig.ch_mult) - 1
         except:
@@ -1187,7 +1226,10 @@ class LatentDiffusion(DDPM):
             else:
                 x = super().get_input(batch, self.first_stage_key)
             x = x.to(self.device)
-            encoder_posterior = self.encode_first_stage(x)
+            if self.no_encode_source:
+                encoder_posterior = x
+            else:
+                encoder_posterior = self.encode_first_stage(x)
             z = self.get_first_stage_encoding(encoder_posterior).detach()
             del self.scale_factor
             self.register_buffer('scale_factor', 1. / z.flatten().std())
@@ -1204,7 +1246,15 @@ class LatentDiffusion(DDPM):
             self.make_cond_schedule()
 
     def instantiate_first_stage(self, config):
-        model = instantiate_from_config(config)
+        # 若为EncodecModel，采用专门的实例化方式
+        if "EncodecModel" in config.target:
+            assert self.e2e, "Fool! You can't use EncodecModel without encodec=True!"
+            model = get_obj_from_str(config.target).encodec_model_24khz()
+            model.set_target_bandwidth(config.params.bandwidth)
+        else:
+            model = instantiate_from_config(config)
+
+        # eval模式，参数不可训练
         self.first_stage_model = model.eval()
         self.first_stage_model.train = disabled_train
         for param in self.first_stage_model.parameters():
@@ -1270,6 +1320,12 @@ class LatentDiffusion(DDPM):
         else:
             assert hasattr(self.cond_stage_model, self.cond_stage_forward)
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+        # 拆包encodec的输出
+        if self.e2e:
+            c = torch.cat([encoded[0] for encoded in c], dim=-1)
+        # min-max标准化
+        if self.rescale_latent:
+            c = norm_min_max(c, 0, 1023)
         return c
 
     def meshgrid(self, h, w):
@@ -1380,12 +1436,16 @@ class LatentDiffusion(DDPM):
         if bs is not None:
             x = x[:bs]
         x = x.to(self.device)
-        encoder_posterior = self.encode_first_stage(x)  # 对样本编码
+        # 若无需执行编码
+        if self.no_encode_source:
+            encoder_posterior = x
+        else:
+            encoder_posterior = self.encode_first_stage(x)  # 对样本编码
         z = self.get_first_stage_encoding(encoder_posterior).detach()
 
         # 计算条件和条件编码
-        # 若为 条件模式或非仅返回样本
-        if (self.model.conditioning_key is not None) or (not only_x):
+        # 若为 条件模式&并非仅返回样本
+        if (self.model.conditioning_key is not None) and (not only_x):
             if cond_key is None:
                 cond_key = self.cond_stage_key
             # 若条件的key != 样本的key, 从batch取条件
@@ -1398,8 +1458,8 @@ class LatentDiffusion(DDPM):
                     xc = super().get_input(batch, cond_key).to(self.device)
             else:
                 xc = x  # 条件=样本
-            #  若条件编解码器不可训练 或 强制编码条件, 执行对条件的编码
-            if not self.cond_stage_trainable or force_c_encode:
+            # 若(条件编解码器不可训练|强制编码条件)&并非无需编码, 执行对条件的编码
+            if (not self.cond_stage_trainable or force_c_encode) and not self.no_encode_source:
                 if isinstance(xc, dict) or isinstance(xc, list):
                     # import pudb; pudb.set_trace()
                     c = self.get_learned_conditioning(xc)
@@ -1407,8 +1467,11 @@ class LatentDiffusion(DDPM):
                     c = self.get_learned_conditioning(xc.to(self.device))
             else:
                 c = xc  # 不处理
+
             if bs is not None:
                 c = c[:bs]
+            # 令c的dtype与z一致
+            c = c.to(z.dtype)
 
             if self.use_positional_encodings:
                 pos_x, pos_y = self.compute_latent_shifts(batch)
@@ -1424,7 +1487,7 @@ class LatentDiffusion(DDPM):
         out = [z, c]  # 样本编码，条件编码
         if return_first_stage_outputs:
             xrec = self.decode_first_stage(z)  # 样本解码
-            out.extend([x, xrec])
+            out.extend([x, xrec])  # 原始样本
         if return_original_cond:
             out.append(xc)  # 条件
         return out
@@ -1432,6 +1495,7 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
         if predict_cids:
+            # 一般取不到
             if z.dim() == 4:
                 z = torch.argmax(z.exp(), dim=1).long()
             z = self.first_stage_model.quantize.get_codebook_entry(z, shape=None)
@@ -1484,10 +1548,20 @@ class LatentDiffusion(DDPM):
                     return self.first_stage_model.decode(z)
 
         else:
-            if isinstance(self.first_stage_model, VQModelInterface):
-                return self.first_stage_model.decode(z, force_not_quantize=predict_cids or force_not_quantize)
+            if self.e2e:
+                # 值域缩放->[0, 1] (用于应对采样结果数值过大)
+                z_copy = (z - torch.min(z)) / (torch.max(z) - torch.min(z))
+                # 还原到latent真实分布
+                z_copy = norm_min_max_inv(z_copy, 0, 1023)
+                z_copy = [(z_copy.to(torch.int64), None), ]  # 包装为encodec的解码输入
             else:
-                return self.first_stage_model.decode(z)
+                z_copy = z
+            if isinstance(self.first_stage_model, VQModelInterface):
+                z_recon = self.first_stage_model.decode(z_copy, force_not_quantize=predict_cids or force_not_quantize)
+            else:
+                z_recon = self.first_stage_model.decode(z_copy)
+
+            return z_recon
 
     # same as above but without decorator
     def differentiable_decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
@@ -1587,9 +1661,17 @@ class LatentDiffusion(DDPM):
             else:
                 return self.first_stage_model.encode(x)
         else:
-            return self.first_stage_model.encode(x)
+            z = self.first_stage_model.encode(x)
+            # 拆包, if necessary
+            if self.e2e:
+                z = torch.cat([encoded[0] for encoded in z], dim=-1)
+            # 标准化->[-1, 1], if necessary
+            if self.rescale_latent:
+                z = norm_min_max(z, 0, 1023)
+            return z
 
     def shared_step(self, batch, **kwargs):
+        """ 取输入，并调用前向计算 """
         # 扩展到样本的key可以有多个
         if isinstance(self.first_stage_key, omegaconf.listconfig.ListConfig):
             # 在W维度拼接源
@@ -1599,7 +1681,7 @@ class LatentDiffusion(DDPM):
                     x = input[0]  # 样本
                     c = input[1]  # 条件
                 else:
-                    x = torch.cat([x, input[0]], dim=2)
+                    x = torch.cat([x, input[0]], dim=self.concat_dim)
         else:
             x, c = self.get_input(batch, self.first_stage_key)
         loss = self(x, c)
@@ -1763,8 +1845,11 @@ class LatentDiffusion(DDPM):
             target = noise
         else:
             raise NotImplementedError()
-
-        loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
+        if len(model_output.shape) == 4:
+            loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
+        # 扩展到样本shape为(B, T, L)的情形
+        elif len(model_output.shape) == 3:
+            loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})  # l_simple
 
         self.logvar = self.logvar.to(self.device)  # 修正代码 设备不一致错误
@@ -1776,8 +1861,10 @@ class LatentDiffusion(DDPM):
             loss_dict.update({'logvar': self.logvar.data.mean()})
 
         loss = self.l_simple_weight * loss.mean()
-
-        loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+        if len(model_output.shape) == 4:
+            loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+        elif len(model_output.shape) == 3:
+            loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2))
         loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
         loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})  # l_vlb
         loss += (self.original_elbo_weight * loss_vlb)
@@ -1975,13 +2062,18 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def sample_log(self,cond,batch_size,ddim, ddim_steps,**kwargs):
-
         if ddim:
             ddim_sampler = DDIMSampler(self)
-            image_size_h = self.image_size_h if self.image_size_h is not None else self.image_size
-            shape = (self.channels, self.image_size, image_size_h)
-            samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
-                                                        shape,cond,verbose=False,**kwargs)
+
+            if self.e2e:
+                shape = (self.channels, self.image_size)
+                samples, intermediates = ddim_sampler.sample_1d(ddim_steps, batch_size,
+                                                                shape, cond, verbose=False, **kwargs)
+            else:
+                image_size_h = self.image_size_h if self.image_size_h is not None else self.image_size
+                shape = (self.channels, self.image_size, image_size_h)
+                samples, intermediates = ddim_sampler.sample(ddim_steps, batch_size,
+                                                            shape, cond, verbose=False, **kwargs)
 
         else:
             samples, intermediates = self.sample(cond=cond, batch_size=batch_size,
@@ -2024,7 +2116,7 @@ class LatentDiffusion(DDPM):
                                                    return_first_stage_outputs=True,
                                                    force_c_encode=True,
                                                    return_original_cond=True,
-                                                   bs=N, only_x=i != 0)
+                                                   bs=N, only_x=i != 1)
                 if i == 0:
                     z = z_per
                     x = x_per
@@ -2032,7 +2124,7 @@ class LatentDiffusion(DDPM):
                 else:
                     z = torch.cat([z, z_per], dim=2)
                     x = torch.cat([x, x_per], dim=2)
-                    xrec = torch.cat([xrec, xrec_per], dim=2)
+                    xrec = torch.cat([xrec, xrec_per], dim=self.concat_dim)
         else:
             z, c, x, xrec, xc = self.get_input(batch, self.first_stage_key,
                                                return_first_stage_outputs=True,
@@ -2145,6 +2237,66 @@ class LatentDiffusion(DDPM):
         return log
 
     @torch.no_grad()
+    def log_audios(self, batch, N=8, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None, ):
+        use_ddim = ddim_steps is not None
+        log = dict()
+        # 获取输入以及输入的编码形式
+        if isinstance(self.first_stage_key, omegaconf.listconfig.ListConfig):
+            # 在Channel维度拼接源
+            for i, k in enumerate(self.first_stage_key):
+                # input = self.get_input(batch, k, )
+                # 依次为 样本编码、条件编码、原始样本、样本解码、原始条件
+                z_per, c, xc = self.get_input(batch, k,
+                                                   return_first_stage_outputs=False,
+                                                   force_c_encode=False,
+                                                   return_original_cond=True,
+                                                   bs=N, only_x=i != 1)
+                if i == 0:
+                    z = z_per
+                else:
+                    z = torch.cat([z, z_per], dim=2)
+        else:
+            z, c, xc = self.get_input(batch, self.first_stage_key,
+                                               return_first_stage_outputs=False,
+                                               force_c_encode=False,
+                                               return_original_cond=True,
+                                               bs=N)
+        # 若为条件模式，载入并解码(if necessary), 然后log
+        if self.model.conditioning_key is not None:
+            # 若cond_stage_model有decode(), decode条件并记录
+            if hasattr(self.cond_stage_model, "decode"):
+                if self.e2e:
+                    c_recon = norm_min_max_inv(c.detach(), 0, 1023)
+                    c_recon = [(c_recon.to(torch.int64), None), ]
+                xc = self.cond_stage_model.decode(c_recon)
+                log["conditioning"] = xc
+        # log["conditioning"] = xc
+        # 令采样的batch_size不超过条件的数量
+        N = min(xc.shape[0], N)
+        # 采样
+        if sample:
+            # get denoise row
+            with self.ema_scope("Plotting"):
+                samples, z_denoise_row = self.sample_log(cond=c, batch_size=N, ddim=use_ddim,
+                                                         ddim_steps=ddim_steps, eta=ddim_eta)
+            # # 在channel上拆分源, 并分别解码为音频
+            samples = torch.chunk(samples, 2, dim=1)
+            # 在channel维度叠放两个源, (B, 2, T)
+            for i, s in enumerate(samples):
+                if i == 0:
+                    x_samples = self.decode_first_stage(s)
+                else:
+                    x_samples = torch.cat([x_samples, self.decode_first_stage(s)], dim=1)
+            log["samples"] = x_samples
+        # 是否指定需要返回的key
+        if return_keys:
+            if np.intersect1d(list(log.keys()), return_keys).shape[0] == 0:
+                return log
+            else:
+                return {key: log[key] for key in return_keys}
+        return log
+
+    @torch.no_grad()
     def log_npy(self, batch, N=8, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None, ):
         use_ddim = ddim_steps is not None
         log = dict()
@@ -2165,7 +2317,7 @@ class LatentDiffusion(DDPM):
                 else:
                     z = torch.cat([z, z_per], dim=2)
                     x = torch.cat([x, x_per], dim=2)
-                    xrec = torch.cat([xrec, xrec_per], dim=2)
+                    xrec = torch.cat([xrec, xrec_per], dim=self.concat_dim)
         else:
             z, c, x, xrec = self.get_input(batch, self.first_stage_key,
                                                return_first_stage_outputs=True,

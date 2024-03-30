@@ -1,11 +1,15 @@
 import argparse, os, sys, datetime, glob, importlib, csv
+from typing import Optional, Any
+
 import numpy as np
 import time
 import torch
 import torchvision
+import torchaudio
 import pytorch_lightning as pl
 from packaging import version
 from omegaconf import OmegaConf
+from pytorch_lightning.utilities.types import STEP_OUTPUT
 from torch.utils.data import random_split, DataLoader, Dataset, Subset
 from functools import partial
 from PIL import Image
@@ -404,6 +408,160 @@ class ImageLogger(Callback):
             if (pl_module.calibrate_grad_norm and batch_idx % 25 == 0) and batch_idx > 0:
                 self.log_gradients(trainer, pl_module, batch_idx=batch_idx)
 
+class AudioLogger(Callback):
+    def __init__(self, batch_frequency, max_audios, fixed_len, save_path="./", clamp=True, increase_log_steps=True,
+                 rescale=False, disabled=False, log_on_batch_idx=False, log_first_step=False,
+                 log_audios_kwargs=None, orig_sr=None, save_sr=None):
+        super().__init__()
+        self.rescale = rescale
+        self.batch_freq = batch_frequency
+        self.max_audios = max_audios  # 保存的最多音频数
+        self.fixed_len = fixed_len  # 音频的样本点数
+        self.save_path = save_path  # 音频的输出路径
+        self.logger_log_audios = {
+            pl.loggers.TestTubeLogger: self._testtube,
+        }
+        if not increase_log_steps:
+            self.log_steps = [self.batch_freq]
+        self.clamp = clamp
+        self.disabled = disabled
+        self.log_on_batch_idx = log_on_batch_idx
+        self.log_audios_kwargs = log_audios_kwargs if log_audios_kwargs else {}
+        self.log_first_step = log_first_step
+        self.orig_sr = orig_sr
+        self.save_sr = save_sr
+        if save_sr != orig_sr:
+            self.resampler = torchaudio.transforms.Resample(orig_freq=orig_sr, new_freq=save_sr)
+
+    @rank_zero_only
+    def _testtube(self, pl_module, audios, batch_idx, split):
+        for k in audios:
+            grid = torchvision.utils.make_grid(audios[k])
+            grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+
+            tag = f"{split}/{k}"
+            pl_module.logger.experiment.add_image(
+                tag, grid,
+                global_step=pl_module.global_step)
+
+    @rank_zero_only
+    def log_local(self, save_dir, split, audios,
+                  global_step, current_epoch, batch_idx, pathes, only_sample=False):
+        """
+        :desc: 保存log audios到指定文件夹
+        """
+        root = os.path.join(save_dir, "audios", split)
+
+        # 将audios内的音频保存到对应路径下
+        for k, audio_list in audios.items():
+            # 若仅保存样本，则跳过其它key
+            if only_sample and k != "samples":
+                continue
+            idx = 0
+            # 处理batch个音频
+            for audio_pair in audio_list:
+                # # 若需要拆分处理
+                if k in ['samples', ]:
+                    for j, audio in enumerate(audio_pair):
+                        if self.rescale:
+                            audio = (audio + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+                        audio = torch.unsqueeze(audio, dim=0)
+                        filename = "{}__{}.wav".format(
+                            pathes[idx],
+                            j + 1,
+                        )
+                        path = os.path.join(root, filename)
+                        os.makedirs(os.path.split(path)[0], exist_ok=True)
+                        if self.save_sr != self.orig_sr:
+                            audio = self.resampler(audio)
+                        torchaudio.save(path, audio, self.save_sr)
+                # 无需拆分处理，直接存为音频
+                else:
+                    if self.rescale:
+                        audio_pair = (audio_pair + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+                    filename = "{}__{}.wav".format(
+                        k,
+                        pathes[idx],
+                    )
+                    path = os.path.join(root, filename)
+                    os.makedirs(os.path.split(path)[0], exist_ok=True)
+                    if self.save_sr != self.orig_sr:
+                        audio_pair = self.resampler(audio_pair)
+                    torchaudio.save(path, audio_pair, self.save_sr)
+                idx += 1
+
+    def log_audio(self, pl_module, batch, batch_idx, split="train", only_sample=False):
+        check_idx = batch_idx if self.log_on_batch_idx else pl_module.global_step
+        # 若符合log audio条件
+        if (self.check_frequency(check_idx) and  # batch_idx % self.batch_freq == 0
+                hasattr(pl_module, "log_audios") and
+                callable(pl_module.log_audios) and
+                self.max_audios > 0):
+            logger = type(pl_module.logger)
+            is_train = pl_module.training
+            if is_train:
+                pl_module.eval()
+
+            # 以eval模式产生要log的音频对象（<type: audio>）
+            with torch.no_grad():
+                audios = pl_module.log_audios(batch, **self.log_audios_kwargs)
+            # 裁剪个数&长度, 并转换格式
+            for k in audios:
+                # 裁剪到N条
+                N = min(audios[k].shape[0], self.max_audios)
+                audios[k] = audios[k][:N]  # 裁剪个数
+                audios[k] = audios[k][:, :, :self.fixed_len]  # 裁剪长度
+                if isinstance(audios[k], torch.Tensor):
+                    audios[k] = audios[k].detach().cpu()
+                    if self.clamp:
+                        audios[k] = torch.clamp(audios[k], -1., 1.)
+            # 存到本地指定路径下
+            self.log_local(self.save_path, split, audios,
+                           pl_module.global_step, pl_module.current_epoch, batch_idx,
+                           batch['fname'], only_sample=only_sample)
+
+            # logger_log_audios = self.logger_log_audios.get(logger, lambda *args, **kwargs: None)
+            # logger_log_audios(pl_module, audios, pl_module.global_step, split)
+
+            if is_train:
+                pl_module.train()
+
+    def check_frequency(self, check_idx):
+        if ((check_idx % self.batch_freq) == 0) and (
+                check_idx > 0 or self.log_first_step):
+            try:
+                self.log_steps.pop(0)
+            except IndexError as e:
+                print(e)
+                pass
+            return True
+        return False
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+        if not self.disabled and (pl_module.global_step > 0 or self.log_first_step):
+            self.log_audio(pl_module, batch, batch_idx, split="train")
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+        if not self.disabled and pl_module.global_step > 0:
+            self.log_audio(pl_module, batch, batch_idx, split="val")
+        if hasattr(pl_module, 'calibrate_grad_norm'):
+            if (pl_module.calibrate_grad_norm and batch_idx % 25 == 0) and batch_idx > 0:
+                self.log_gradients(trainer, pl_module, batch_idx=batch_idx)
+
+    def on_test_batch_start(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule", batch: Any, batch_idx: int, dataloader_idx: int
+    ) -> None:
+        print("batch start.")
+
+    def on_test_batch_end(
+            self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
+    ) -> None:
+        if not self.disabled and (pl_module.global_step > 0 or self.log_first_step):
+            self.log_audio(pl_module, batch, batch_idx, split="test", only_sample=True)
+
+    # def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+    #     if not self.disabled and (pl_module.global_step > 0 or self.log_first_step):
+    #         self.log_audio(pl_module, batch, batch_idx, split="test", only_sample=True)
 
 class NpyLogger(Callback):
     def __init__(self, batch_frequency, max_images, save_path="./", clamp=True, increase_log_steps=True,
@@ -452,6 +610,7 @@ class NpyLogger(Callback):
                 cond_num = len(batch[b_key])
             self.log_images_kwargs['N'] = cond_num if cond_num is not None else self.log_images_kwargs.N
             images = pl_module.log_npy(batch, **self.log_images_kwargs)
+            self.max_images = max(self.max_images, cond_num)  # 令要保存的图片数理等于条件的数量
         # 裁剪并转换格式
         for k in images:
             # 裁剪到N张图片
@@ -670,6 +829,18 @@ if __name__ == "__main__":
             trainer_kwargs["checkpoint_callback"] = instantiate_from_config(modelckpt_cfg)
 
         # add callback which sets up log directory
+        # # log mel spec分离结果callback
+        """
+        "npy_logger": {
+            "target": "test.NpyLogger",
+            "params": {
+                "batch_frequency": 1,
+                "max_images": 1,
+                "save_path": opt.save_dir,
+                "clamp": True
+            }
+        },
+        """
         default_callbacks_cfg = {
             "setup_callback": {
                 "target": "test.SetupCallback",
@@ -681,23 +852,6 @@ if __name__ == "__main__":
                     "cfgdir": cfgdir,
                     "config": config,
                     "lightning_config": lightning_config,
-                }
-            },
-            "image_logger": {
-                "target": "test.ImageLogger",
-                "params": {
-                    "batch_frequency": 500,  # 500
-                    "max_images": 1,
-                    "clamp": True
-                }
-            },
-            "npy_logger": {
-              "target": "test.NpyLogger",
-                "params": {
-                    "batch_frequency": 1,
-                    "max_images": 1,
-                    "save_path": opt.save_dir,
-                    "clamp": True
                 }
             },
             "learning_rate_logger": {
@@ -753,7 +907,7 @@ if __name__ == "__main__":
             config.data.params.validation = None
         # data
         data = instantiate_from_config(config.data)
-        data.prepare_data()
+        # data.prepare_data()
         data.setup()
         print("#### Data #####")
         for k in data.datasets:

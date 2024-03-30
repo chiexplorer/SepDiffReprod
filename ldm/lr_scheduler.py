@@ -102,12 +102,12 @@ if __name__ == '__main__':
 
     # 定义学习率调度器对象
     scheduler = LambdaWarmUpCosineScheduler(
-        warm_up_steps=1000,
+        warm_up_steps=2000,
         verbosity_interval=0,
         max_decay_steps=80000,
         lr_start=0.0001,
-        lr_max=0.0002,
-        lr_min=0.00001
+        lr_max=0.0003,
+        lr_min=0.000015
     )
 
     # 计算学习率变化曲线

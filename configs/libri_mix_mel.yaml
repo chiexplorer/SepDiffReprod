@@ -27,19 +27,19 @@ model:
         - 4
         - 4
         in_channels: 3
-        hidden_size: 768
+        hidden_size: 1024
         depth: 12
-        num_heads: 12
+        num_heads: 16
         custom_shape: True
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
         verbosity_interval: 0
         warm_up_steps: 1000
-        max_decay_steps: 50000
+        max_decay_steps: 80000
         lr_start: 0.0001
-        lr_max: 0.0002
-        lr_min: 0.00003
+        lr_max: 0.0003
+        lr_min: 0.000015
     first_stage_config:
       target: ldm.models.autoencoder.VQModelInterface
       params:
@@ -74,7 +74,7 @@ data:
       target: ldm.data.librimix.LibriMixData
       params:
         config:
-          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_train-100.csv"
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_train-100-test.csv"
           use_mel_file: True
           orig_sample_rate: 16000
           sampling_rate: 22050
@@ -93,15 +93,15 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 800
+        batch_frequency: 1
         max_images: 1
         clamp: True
+        log_first_step: True
         log_images_kwargs: {
              N: 1,
              n_row: 1,
         }
 
   trainer:
-    benchmark: True
     max_epochs: 100
-    precision: 16
+    precision: 32
