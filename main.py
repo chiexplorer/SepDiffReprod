@@ -454,7 +454,7 @@ class AudioLogger(Callback):
             idx = 0
             # 处理batch个音频
             for audio_pair in audio_list:
-                # # 若需要拆分处理
+                # # 若需要拆分处理的音频
                 if k in ['samples', ]:
                     for j, audio in enumerate(audio_pair):
                         if self.rescale:
@@ -471,8 +471,8 @@ class AudioLogger(Callback):
                         if self.save_sr != self.orig_sr:
                             audio = self.resampler(audio)
                         torchaudio.save(path, audio, self.save_sr)
-                # 无需拆分处理，直接存为音频
-                else:
+                # 无需拆分处理，直接存音频
+                elif k in ["conditioning", ]:
                     if self.rescale:
                         audio_pair = (audio_pair + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
                     filename = "{}__{}.wav".format(
@@ -634,7 +634,7 @@ if __name__ == "__main__":
         if os.path.isfile(opt.resume):
             paths = opt.resume.split("\\")
             idx = len(paths) - paths[::-1].index("logs")+1
-            logdir = "/".join(paths[:idx])
+            logdir = "/".join(paths[:idx])  # 找到 :logs的路径
             ckpt = opt.resume
         else:
             assert os.path.isdir(opt.resume), opt.resume
@@ -686,11 +686,15 @@ if __name__ == "__main__":
 
         # model
         model = instantiate_from_config(config.model)
+        # # 手动转换模型精度，用于混合精度训练
+        # if lightning_config.trainer.precision == 16:
+        #     model = model.half()
 
         # trainer and callbacks
         trainer_kwargs = dict()
 
         # default logger configs
+        # 若希望testtube每次从checkpoint恢复时记录不同的log版本，删去参数——"version": 0
         default_logger_cfgs = {
             "wandb": {
                 "target": "pytorch_lightning.loggers.WandbLogger",
@@ -706,6 +710,7 @@ if __name__ == "__main__":
                 "params": {
                     "name": "testtube",
                     "save_dir": logdir,
+                    "version": 0
                 }
             },
         }
@@ -778,6 +783,18 @@ if __name__ == "__main__":
             "cuda_callback": {
                 "target": "main.CUDACallback"
             },
+            "early_stopping": {
+                "target": "pytorch_lightning.callbacks.early_stopping.EarlyStopping",
+                "params": {
+                    "monitor": model.monitor,
+                    "min_delta": 0.0005,
+                    "patience": 8,
+                    "mode": "min",
+                    "verbose": True
+                }
+
+            }
+
         }
         if version.parse(pl.__version__) >= version.parse('1.4.0'):
             default_callbacks_cfg.update({'checkpoint_callback': modelckpt_cfg})
@@ -819,7 +836,7 @@ if __name__ == "__main__":
         if tmp_mode == "normal":
             # data
             data = instantiate_from_config(config.data)
-            # data.prepare_data()
+            data.prepare_data()
             data.setup()
             print("#### Data #####")
             for k in data.datasets:

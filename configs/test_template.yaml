@@ -1,0 +1,95 @@
+model:
+  base_learning_rate: 1.0
+  target: ldm.models.diffusion.ddpm.LatentDiffusion
+  params:
+    linear_start: 0.0015
+    linear_end: 0.0195
+    num_timesteps_cond: 1
+    log_every_t: 200
+    timesteps: 1000
+    first_stage_key:
+    - s1_wav
+    - s2_wav
+    cond_stage_key: mix_wav
+    image_size: 300
+    channels: 16
+    cond_stage_trainable: false
+    conditioning_key: crossattn
+    monitor: train_loss
+    ckpt_path: D:/Projects/pyprog/SepDiffReprod/logs/2024-03-30T12-45-15_libri_mix_e2e/checkpoints/epoch=021-train_loss=0.0857.ckpt
+    e2e: true
+    concat_dim: 1
+    rescale_latent: false
+    no_encode_source: true
+    scheduler_config:
+      target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
+      params:
+        verbosity_interval: 0
+        warm_up_steps: 2000
+        max_decay_steps: 80000
+        lr_start: 5.0e-05
+        lr_max: 0.0002
+        lr_min: 1.0e-05
+    unet_config:
+      target: ldm.modules.diffusionmodules.yangmodel.DiTE2E
+      params:
+        input_size: 300
+        in_channels: 16
+        hidden_size: 768
+        depth_t: 2
+        depth: 12
+        num_heads: 12
+        custom_shape: false
+    first_stage_config:
+      target: encodec.model.EncodecModel
+      params:
+        bandwidth: 6.0
+    cond_stage_config: __is_first_stage__
+data:
+  target: test.DataModuleFromConfig
+  params:
+    batch_size: 16
+    num_workers: 0
+    wrap: false
+    train:
+      target: ldm.data.librimix.LibriMixE2E
+      params:
+        config:
+          csv_path: D:/Projects/pyprog/SepDiffReprod/data/encodec/libri2mix_train-100.csv
+          orig_sample_rate: 16000
+          sampling_rate: 24000
+          norm_min: 0
+          norm_max: 1023
+          fixed_len: 96000
+    test:
+      target: ldm.data.librimix.LibriMixE2E
+      params:
+        config:
+          csv_path: D:/Projects/pyprog/SepDiffReprod/data/encodec/libri2mix_debug.csv
+          orig_sample_rate: 16000
+          sampling_rate: 24000
+          norm_min: 0
+          norm_max: 1023
+          fixed_len: 96000
+
+lightning:
+  callbacks:
+    image_logger:
+      target: test.AudioLogger
+      params:
+        batch_frequency: 1
+        max_audios: 4
+        clamp: true
+        fixed_len: 96000
+        increase_log_steps: false
+        orig_sr: 24000
+        save_sr: 16000
+        save_path: D:/Projects/pyprog/SepDiffReprod/files
+        log_first_step: true
+        log_audios_kwargs:
+          N: 1
+
+  trainer:
+    max_epochs: 100
+    precision: 32
+    gpus: 0,

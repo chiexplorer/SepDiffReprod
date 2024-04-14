@@ -5,7 +5,7 @@ import numpy as np
 
 
 """
-    验证norm和逆向norm是否导致信息损失
+    验证norm和逆向norm是否导致了信息重建损失
 """
 
 def loader_preprocess(x, minV, maxV):
@@ -42,11 +42,26 @@ def loader_preprocess(x, minV, maxV):
 #     return x
 
 def norm_min_max(x, minV, maxV):
-    x = (x - minV) / (maxV - minV)
+    # # min-max标准化->[0, 1]
+    # x = (x - minV) / (maxV - minV)
+
+    # #
+    mean = (maxV + minV) / 2
+    x = x - mean  # 中心化
+    x = x / mean  # 减去区间均值
     return x
 
 def norm_min_max_inv(x, minV, maxV):
-    x = x * (maxV - minV) + minV  # 逆min-max标准化
+    # # min-max逆标准化->[-1, 1]
+    # x = x * (maxV - minV) + minV  # 逆min-max标准化
+    # # # ->[-1, 1]
+    mean = (maxV + minV) / 2
+    x = x * mean  # 归一化
+    x = x + mean  # 减去区间均值
+    # x = torch.clamp(x, -1, 1)  # [-1, 1]
+    # x = (x + 1) / 2  # [0, 1]
+    # x = x / 2
+    # x = x * (maxV - minV) + minV  # 逆min-max标准化
     return x
 
 
@@ -54,7 +69,7 @@ if __name__ == '__main__':
 
     # 模拟输入
     x = torch.arange(0, 1024).to(torch.int16)
-    # x = torch.randint(0, 1024, (1, 1, 80000)).to(torch.int16)
+    # x = torch.randint(0, 1024, (1, 1, 2000)).to(torch.int16)
 
     # 模拟norm
     x_norm = norm_min_max(x,0, 1023)

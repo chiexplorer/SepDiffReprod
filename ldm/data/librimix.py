@@ -230,12 +230,13 @@ class LibriMixE2E(Dataset):
         """
             样本标准化
         """
-        # --- min-max norm -> [0, 1]
-        x = (x - self.norm_min) / (self.norm_max - self.norm_min)
-        # # --- /mu norm -> [-1, 1]
-        # mean = (self.norm_max + self.norm_min) / 2
-        # x = x - mean  # 减去区间均值
-        # x = x / mean  # 归一化
+        # # --- min-max norm -> [0, 1]
+        # x = (x - self.norm_min) / (self.norm_max - self.norm_min)
+        # --- /mu norm -> [-1, 1]
+        mean = (self.norm_max + self.norm_min) / 2
+        x = x - mean  # 减去区间均值
+        x = x / mean  # 归一化
+        # # min-max标准化
         # x = (x - self.norm_min) / (self.norm_max - self.norm_min)  # min-max标准化
         # torch.clamp(x, min=0, max=1)  # 钳位
         # x = 2 * x - 1  # 值域缩放到[-1, 1]

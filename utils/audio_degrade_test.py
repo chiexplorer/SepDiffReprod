@@ -8,7 +8,7 @@ from encodec.model import EncodecModel
 from ldm.data.librimix import LibriMixE2E
 
 """
-    检查E2E encodec方法中，条件音频信息损失发生的阶段
+    检查E2E encodec方法中，定位条件音频信息损失发生的阶段
 """
 
 def norm_min_max(x, minV, maxV):

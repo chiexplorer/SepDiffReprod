@@ -56,3 +56,6 @@ def get_epoch_from_path(ckpt):
         if char.isdigit():
             num_str += char
     return int(num_str)
+
+def printVar(x, tip=""):
+    print(f"{tip}: max: {x.max()}, min: {x.min()}, mean: {x.mean()}, var: {x.var()}")

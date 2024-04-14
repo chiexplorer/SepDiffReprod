@@ -43,36 +43,40 @@ def disabled_train(self, mode=True):
 def uniform_on_device(r1, r2, shape, device):
     return (r1 - r2) * torch.rand(*shape, device=device) + r2
 
+def rescale(x, minV, maxV):
+    mean = (maxV + minV) / 2
+    return (x - mean) / (maxV - minV) * 2
+
 def norm_min_max(x, minV, maxV):
     """
         将x值域通过min-max标准化到值域[-1, 1]内
     """
-    # min-max -> [0, 1]
-    x = (x - minV) / (maxV - minV)
-    # # --- /mu norm -> [-1, 1]
-    # mean = (maxV + minV) / 2
-    # x = x - mean  # 减去区间均值
-    # x = x / mean  # 归一化
+    # # min-max -> [0, 1]
+    # res = (x - minV) / (maxV - minV)
+    # --- /mu norm -> [-1, 1]
+    mean = (maxV + minV) / 2
+    res = x - mean  # 减去区间均值
+    res = res / mean  # 归一化
     # # --- min-max -> [-1, 1]
-    # x = (x - minV) / (maxV - minV)  # min-max标准化
-    # torch.clamp(x, min=0, max=1)  # 钳位
-    # x = 2 * x - 1  # 值域缩放到[-1, 1]
-    return x
+    # res = (x - minV) / (maxV - minV)  # min-max标准化
+    # torch.clamp(res, min=0, max=1)  # 钳位
+    # res = 2 * res - 1  # 值域缩放到[-1, 1]
+    return res
 
 def norm_min_max_inv(x, minV, maxV):
     """
         将x值域从NN输出逆标准化到值域[minV, maxV]
     """
-    # min-max -> [0, 1]
-    x = x * (maxV - minV) + minV
-    # # --- /mu norm -> [-1, 1]
-    # mean = (maxV + minV) / 2
-    # x = x * mean  # 归一化
-    # x = x + mean  # 减去区间均值
+    # # min-max -> [0, 1]
+    # res = x * (maxV - minV) + minV
+    # --- /mu norm -> [-1, 1]
+    mean = (maxV + minV) / 2
+    res = x * mean  # 归一化
+    res = res + mean  # 减去区间均值
     # # --- min-max -> [-1, 1]
-    # x = (x + 1) / 2  # [0, 1]
-    # x = x * (maxV - minV) + minV  # 逆min-max标准化
-    return x
+    # res = (res + 1) / 2  # [0, 1]
+    # res = res * (maxV - minV) + minV  # 逆min-max标准化
+    return res
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -1549,8 +1553,11 @@ class LatentDiffusion(DDPM):
 
         else:
             if self.e2e:
-                # 值域缩放->[0, 1] (用于应对采样结果数值过大)
-                z_copy = (z - torch.min(z)) / (torch.max(z) - torch.min(z))
+                # 值域缩放->[-1, 1] (用于应对采样结果数值过大)
+                z_copy = torch.clamp(z, -1, 1)
+                # z_copy = rescale(z, z.min(), z.max())
+                # z_copy = norm_min_max(z, z.min(), z.max())
+                # z_copy = (z - torch.min(z)) / (torch.max(z) - torch.min(z))
                 # 还原到latent真实分布
                 z_copy = norm_min_max_inv(z_copy, 0, 1023)
                 z_copy = [(z_copy.to(torch.int64), None), ]  # 包装为encodec的解码输入
@@ -2076,8 +2083,13 @@ class LatentDiffusion(DDPM):
                                                             shape, cond, verbose=False, **kwargs)
 
         else:
+            if self.e2e:
+                shape = (batch_size, self.channels, self.image_size)
+            else:
+                image_size_h = self.image_size_h if self.image_size_h is not None else self.image_size
+                shape = (batch_size, self.channels, self.image_size, image_size_h)
             samples, intermediates = self.sample(cond=cond, batch_size=batch_size,
-                                                 return_intermediates=True,**kwargs)
+                                                 return_intermediates=True, shape=shape, **kwargs)
 
         return samples, intermediates
 
@@ -2254,13 +2266,17 @@ class LatentDiffusion(DDPM):
                 if i == 0:
                     z = z_per
                 else:
-                    z = torch.cat([z, z_per], dim=2)
+                    z = torch.cat([z, z_per], dim=self.concat_dim)
         else:
             z, c, xc = self.get_input(batch, self.first_stage_key,
                                                return_first_stage_outputs=False,
                                                force_c_encode=False,
                                                return_original_cond=True,
                                                bs=N)
+        if self.e2e:
+            z_log = norm_min_max_inv(z.detach(), 0, 1023)
+            z_log = z_log.to(torch.int16)
+            log['inputs'] = z_log  # 原始编码
         # 若为条件模式，载入并解码(if necessary), 然后log
         if self.model.conditioning_key is not None:
             # 若cond_stage_model有decode(), decode条件并记录
@@ -2279,8 +2295,17 @@ class LatentDiffusion(DDPM):
             with self.ema_scope("Plotting"):
                 samples, z_denoise_row = self.sample_log(cond=c, batch_size=N, ddim=use_ddim,
                                                          ddim_steps=ddim_steps, eta=ddim_eta)
+            if self.e2e:
+                # 此处尝试对采样输出的不同规范化方法
+                samples_log = torch.clamp(samples, -1, 1)
+                # samples_log = rescale(samples, samples.min(), samples.max())
+                # samples_log = norm_min_max(samples, samples.min(), samples.max())
+                # samples_log = (samples - torch.min(samples)) / (torch.max(samples) - torch.min(samples))
+                samples_log = norm_min_max_inv(samples_log, 0, 1023)
+                samples_log = samples_log.to(torch.int16)
+                log['outputs'] = samples_log
             # # 在channel上拆分源, 并分别解码为音频
-            samples = torch.chunk(samples, 2, dim=1)
+            samples = torch.chunk(samples, 2, dim=2)
             # 在channel维度叠放两个源, (B, 2, T)
             for i, s in enumerate(samples):
                 if i == 0:
@@ -2309,7 +2334,7 @@ class LatentDiffusion(DDPM):
                                                    return_first_stage_outputs=True,
                                                    force_c_encode=True,
                                                    return_original_cond=False,
-                                                   bs=N, only_x=i != 0)
+                                                   bs=N, only_x=i != 1)
                 if i == 0:
                     z = z_per
                     x = x_per

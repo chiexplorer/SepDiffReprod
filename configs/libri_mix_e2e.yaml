@@ -11,13 +11,13 @@ model:
       - "s1_wav"
       - "s2_wav"
     cond_stage_key: "mix_wav"
-    image_size: 300
-    channels: 16
+    image_size: 600
+    channels: 8
     cond_stage_trainable: false
     conditioning_key: crossattn
     monitor: train_loss
     e2e: true
-    concat_dim: 1
+    concat_dim: 2
     rescale_latent: False
     no_encode_source: True
     scheduler_config:
@@ -25,19 +25,19 @@ model:
       params:
         verbosity_interval: 0
         warm_up_steps: 2000
-        max_decay_steps: 80000
+        max_decay_steps: 50000
         lr_start: 0.00005
         lr_max: 0.0002
         lr_min: 0.00001
     unet_config:
-      target: ldm.modules.diffusionmodules.yangmodel.DiTE2E
+      target: ldm.modules.diffusionmodules.yangmodel.DiTE2EV2
       params:
-        input_size: 300
-        in_channels: 16
-        hidden_size: 768
+        input_size: 600
+        in_channels: 8
+        hidden_size: 384
+        depth_t: 3
         depth: 12
         num_heads: 12
-        custom_shape: False
     first_stage_config:
       target: encodec.model.EncodecModel
       params:
@@ -66,16 +66,17 @@ lightning:
     image_logger:
       target: main.AudioLogger
       params:
-        batch_frequency: 2000
+        batch_frequency: 1500
         max_audios: 1
         clamp: True
         fixed_len: 96000
         increase_log_steps: False
         orig_sr: 24000
         save_sr: 16000
-        log_first_step: True
+        log_first_step: False
         log_audios_kwargs:
           N: 1
+
 
   trainer:
     max_epochs: 100

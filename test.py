@@ -408,6 +408,10 @@ class ImageLogger(Callback):
             if (pl_module.calibrate_grad_norm and batch_idx % 25 == 0) and batch_idx > 0:
                 self.log_gradients(trainer, pl_module, batch_idx=batch_idx)
 
+    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+        if not self.disabled and (pl_module.global_step > 0 or self.log_first_step):
+            self.log_img(pl_module, batch, batch_idx, split="test")
+
 class AudioLogger(Callback):
     def __init__(self, batch_frequency, max_audios, fixed_len, save_path="./", clamp=True, increase_log_steps=True,
                  rescale=False, disabled=False, log_on_batch_idx=False, log_first_step=False,
@@ -451,7 +455,7 @@ class AudioLogger(Callback):
         :desc: 保存log audios到指定文件夹
         """
         root = os.path.join(save_dir, "audios", split)
-
+        npy_root = os.path.join(save_dir, "npy", split)
         # 将audios内的音频保存到对应路径下
         for k, audio_list in audios.items():
             # 若仅保存样本，则跳过其它key
@@ -475,8 +479,8 @@ class AudioLogger(Callback):
                         if self.save_sr != self.orig_sr:
                             audio = self.resampler(audio)
                         torchaudio.save(path, audio, self.save_sr)
-                # 无需拆分处理，直接存为音频
-                else:
+                # 无需拆分处理，直接存音频
+                elif k in ["conditioning", ]:
                     if self.rescale:
                         audio_pair = (audio_pair + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
                     filename = "{}__{}.wav".format(
@@ -488,6 +492,18 @@ class AudioLogger(Callback):
                     if self.save_sr != self.orig_sr:
                         audio_pair = self.resampler(audio_pair)
                     torchaudio.save(path, audio_pair, self.save_sr)
+                # 需拆分，存npy
+                elif k in ["inputs", "outputs", ]:
+                    arr_chunks = torch.chunk(audio_pair, 2, dim=0)
+                    for j, arr in enumerate(arr_chunks):
+                        filename = "{}_{}__{}.npy".format(
+                            k,
+                            pathes[idx],
+                            j + 1,
+                        )
+                        path = os.path.join(npy_root, filename)
+                        os.makedirs(os.path.split(path)[0], exist_ok=True)
+                        np.save(path, arr)
                 idx += 1
 
     def log_audio(self, pl_module, batch, batch_idx, split="train", only_sample=False):
@@ -513,7 +529,7 @@ class AudioLogger(Callback):
                 audios[k] = audios[k][:, :, :self.fixed_len]  # 裁剪长度
                 if isinstance(audios[k], torch.Tensor):
                     audios[k] = audios[k].detach().cpu()
-                    if self.clamp:
+                    if self.clamp and k not in ["inputs", "outputs", ]:
                         audios[k] = torch.clamp(audios[k], -1., 1.)
             # 存到本地指定路径下
             self.log_local(self.save_path, split, audios,
@@ -557,11 +573,8 @@ class AudioLogger(Callback):
             self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ) -> None:
         if not self.disabled and (pl_module.global_step > 0 or self.log_first_step):
-            self.log_audio(pl_module, batch, batch_idx, split="test", only_sample=True)
+            self.log_audio(pl_module, batch, batch_idx, split="test", only_sample=False)
 
-    # def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
-    #     if not self.disabled and (pl_module.global_step > 0 or self.log_first_step):
-    #         self.log_audio(pl_module, batch, batch_idx, split="test", only_sample=True)
 
 class NpyLogger(Callback):
     def __init__(self, batch_frequency, max_images, save_path="./", clamp=True, increase_log_steps=True,
@@ -587,7 +600,7 @@ class NpyLogger(Callback):
             for i, image in enumerate(images[k]):
                 npy = image.numpy()
                 if self.rescale:
-                    npy = (npy + 1.0) / 2.0  # -1,1 -> 0,1
+                    npy = (npy + 1.0) / 2.0  # -1,1 -> 0, 1
                     npy = npy * (mel_max - mel_min) + mel_min  # 还原到 log mel spec的分布
                 filename = "{}.npy".format(wav_names[i])
                 path = os.path.join(save_dir, filename)
@@ -610,7 +623,7 @@ class NpyLogger(Callback):
                 cond_num = len(batch[b_key])
             self.log_images_kwargs['N'] = cond_num if cond_num is not None else self.log_images_kwargs.N
             images = pl_module.log_npy(batch, **self.log_images_kwargs)
-            self.max_images = max(self.max_images, cond_num)  # 令要保存的图片数理等于条件的数量
+            self.max_images = max(self.max_images, cond_num)  # 令要保存的图片数量等于条件的数量
         # 裁剪并转换格式
         for k in images:
             # 裁剪到N张图片

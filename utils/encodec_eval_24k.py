@@ -8,6 +8,9 @@ import torch
 from pathlib import Path
 import os, time
 
+"""
+    Encodec编解码示例
+"""
 
 if __name__ == '__main__':
     fpath = r"H:\exp\output\ground_truth\s1\1089-134686-0000_61-70968-0047.wav"

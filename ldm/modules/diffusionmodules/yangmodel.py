@@ -11,8 +11,10 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import math
+from enum import Enum
 from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 from omegaconf.listconfig import ListConfig
 from ldm.modules.attention import SpatialTransformer, BasicTransformerBlock
@@ -26,6 +28,12 @@ def modulate_yang(x, shift, scale):
 #################################################################################
 #               Embedding Layers for Timesteps and Class Labels                 #
 #################################################################################
+
+class Format(str, Enum):
+    NCHW = 'NCHW'
+    NHWC = 'NHWC'
+    NCL = 'NCL'
+    NLC = 'NLC'
 
 class TimestepEmbedder(nn.Module):
     """
@@ -214,9 +222,12 @@ class FinalLayer(nn.Module):
         )
 
     def forward(self, x, c):
-        # 若c是二维形式
+        # 若c是三维形式
         if len(c.shape) == 3:
             shift, scale = self.adaLN_modulation(c).chunk(2, dim=2)  # 在最后一个维度拆分
+            # # 在embed_dim复制一份
+            # shift = torch.cat([shift, shift], dim=1)
+            # scale = torch.cat([scale, scale], dim=1)
             x = modulate_yang(self.norm_final(x), shift, scale)  # 均值&方差和x同shape
         elif len(c.shape) == 2:
             shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)  # 原代码
@@ -442,6 +453,7 @@ class DiTE2E(nn.Module):
         self.input_size = input_size  # 输入长度
         self.emb_dim = emb_dim  # 输出编码长度
         self.num_heads = num_heads
+        self.hidden_size = hidden_size
         self.custom_shape = custom_shape  # 扩展到宽高比不固定的情形
         self.x_embedder = nn.Linear(input_size, hidden_size, bias=True)
         # self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
@@ -458,15 +470,23 @@ class DiTE2E(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, in_channels, hidden_size), requires_grad=False)
         self.y_pos_embed = nn.Parameter(torch.zeros(1, in_channels//2, hidden_size), requires_grad=False)  # y的位置编码
         self.blocks_t = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth_t)
+            DiTBlockE2E(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth_t)
         ])  # 时间步融合crossAttn
         self.blocks = nn.ModuleList([
             DiTBlockE2E(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])  # 条件融合crossAttn
         # self.final_layer = FinalLayerE2E(hidden_size, input_size)  // 原final layer
-        self.final_layer = nn.Linear(hidden_size, input_size, bias=True)
-        self.activate = nn.Sigmoid()
+        self.final_layer = nn.Sequential(
+            nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6),
+            nn.SiLU(),
+            nn.Linear(hidden_size, input_size, bias=True)
+        )
         # self.initialize_weights()
+        # self.init_pos_embed()  # 用不上位置编码
+
+    def init_pos_embed(self):
+        pos_embed = get_1d_sincos_pos_embed_from_grid(self.pos_embed.shape[-1], np.arange(self.pos_embed.shape[-2], dtype=np.float32))
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
     def initialize_weights(self):
         # Initialize transformer layers:
@@ -519,12 +539,12 @@ class DiTE2E(nn.Module):
         t = torch.unsqueeze(t, dim=1)  # 临时 保证t和y可加，但未思考其意义
         # context = self.y_embedder(context, self.training)    # (N, D)
         context = self.y_embedder(context)   # (N, T_c, D)
-
+        # 融合时间步信息
         for block in self.blocks_t:
-            x = block(x, t) # (N, T, D)
+            x = block(x, t)  # (N, T, D)
+        # 融合条件信息
         for block in self.blocks:
             x = block(x, context)  # (N, T, D)
-        x = self.activate(x)
         x = self.final_layer(x)  # (N, T, patch_size ** 2 * out_channels)
         return x
 
@@ -546,6 +566,203 @@ class DiTE2E(nn.Module):
         eps = torch.cat([half_eps, half_eps], dim=0)
         return torch.cat([eps, rest], dim=1)
 
+class DiTE2EV2(nn.Module):
+    """ Diffusion model with a Transformer backbone. """
+    def __init__(
+        self,
+        input_size=32,
+        patch_size=1,
+        in_channels=4,
+        hidden_size=1152,
+        depth_t=4,
+        depth=28,
+        num_heads=16,
+        mlp_ratio=4.0,
+        class_dropout_prob=0.1,
+        num_classes=1000,
+        learn_sigma=False,
+    ):
+        super().__init__()
+        self.learn_sigma = learn_sigma
+        self.in_channels = in_channels
+        self.out_channels = in_channels * 2 if learn_sigma else in_channels
+        self.input_size = input_size
+        self.patch_size = patch_size
+        self.num_heads = num_heads
+        self.hidden_size = hidden_size
+
+        self.x_embedder = PatchEmbedE2E(input_size, 1, in_channels, hidden_size, bias=True)
+        self.t_embedder = TimestepEmbedder(hidden_size)
+
+        # 编码mix mel spec以在W维度拼接时可用
+        self.y_embedder = PatchEmbedE2E(input_size,
+                                     1, in_channels, hidden_size, bias=True)
+
+        num_patches = self.x_embedder.num_patches
+        # Will use fixed sin-cos embedding:
+        # patch位置编码, shape (1, grid[0]*grid[1], hidden_size)
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches//2, hidden_size), requires_grad=False)
+        self.y_pos_embed = nn.Parameter(torch.zeros(1, num_patches//2, hidden_size), requires_grad=False)  # y的位置编码
+
+        self.blocks_t = nn.ModuleList([
+            DiTBlockE2E(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth_t)
+        ])  # 时间步融合crossAttn
+        self.blocks = nn.ModuleList([
+            DiTBlockE2E(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+        ])
+        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+        # self.initialize_weights()  # 初始化位置编码 + zero init model params
+        self.init_pos_embed()  # 初始化位置编码
+
+    # # 在通道方向拼接源
+    # def init_pos_embed(self):
+    #     pos_embed = get_1d_sincos_pos_embed_from_grid(self.hidden_size, np.arange(self.input_size, dtype=np.float32))
+    #     self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+
+    # 在编码方向拼接源
+    def init_pos_embed(self):
+        pos_embed = get_1d_sincos_pos_embed_from_grid(self.hidden_size, np.arange(self.input_size // 2, dtype=np.float32))
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+        # 初始化所有线性层，令：weight—Xavier 均匀分布，bias—全零值
+        self.apply(_basic_init)
+
+        # Initialize (and freeze) pos_embed by sin-cos embedding:
+        pos_embed = get_1d_sincos_pos_embed_from_grid(self.hidden_size, np.arange(self.input_size, dtype=np.float32))
+        # y_pos_embed = get_1d_sincos_pos_embed_from_grid(self.hidden_size,
+        #                                               np.arange(self.input_size, dtype=np.float32))
+        # self.y_pos_embed.data.copy_(torch.from_numpy(y_pos_embed).float().unsqueeze(0))
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+
+
+        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
+        w = self.x_embedder.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.x_embedder.proj.bias, 0)
+
+        # Initialize label embedding table:
+        # nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+        # # Zero-out adaLN modulation layers in DiT blocks:
+        # for block in self.blocks:
+        #     nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+        #     nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+
+        # Zero-out output layers:
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_layer.linear.weight, 0)
+        nn.init.constant_(self.final_layer.linear.bias, 0)
+
+    def forward(self, x, t, context):
+        """
+        Forward pass of DiT.
+        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
+        t: (N,) tensor of diffusion timesteps
+        context: (N,) tensor of context condition
+        """
+        x = self.x_embedder(x) + torch.cat([self.pos_embed, self.pos_embed], dim=1)  # (N, T, D), where T = H * W / patch_size ** 2
+        t = self.t_embedder(t)                   # (N, D)
+        c = self.y_embedder(context) + self.pos_embed   # (N, T, D)
+        t = torch.unsqueeze(t, dim=1)  # 临时 保证t和y可加，但未思考其意义
+
+        # c = t + c  # (N, D)
+        # 融合时间步信息
+        for block in self.blocks_t:
+            x = block(x, t)  # (N, T, D)
+        for block in self.blocks:
+            x = block(x, c)  # (N, T, D)
+        # if self.custom_shape:
+        #     # 临时 将c在dim=1处复制一份，保证FinalLayer的adaLN 可用
+        #     c = torch.cat((c, c), dim=1)
+        x = self.final_layer(x, c)               # (N, T, C)
+        x = torch.transpose(x, 1, 2)  # (N, T, C) -> (N, C, T)
+        return x
+
+    def forward_with_cfg(self, x, t, context, cfg_scale):
+        """
+        Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
+        """
+        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
+        half = x[: len(x) // 2]
+        combined = torch.cat([half, half], dim=0)
+        model_out = self.forward(combined, t, context)
+        # For exact reproducibility reasons, we apply classifier-free guidance on only
+        # three channels by default. The standard approach to cfg applies it to all channels.
+        # This can be done by uncommenting the following line and commenting-out the line following that.
+        # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
+        eps, rest = model_out[:, :3], model_out[:, 3:]
+        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
+        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+        eps = torch.cat([half_eps, half_eps], dim=0)
+        return torch.cat([eps, rest], dim=1)
+
+class PatchEmbedE2E(nn.Module):
+    """
+        2D Image to Patch Embedding
+    """
+    def __init__(
+            self,
+            img_size=224,
+            patch_size=1,
+            in_chans=3,
+            embed_dim=768,
+            norm_layer=None,
+            flatten=False,
+            output_fmt=None,
+            bias=True,
+            strict_img_size=True,
+            dynamic_img_pad=False,
+    ):
+        super().__init__()
+        self.patch_size = patch_size
+        if img_size is not None:
+            self.img_size = img_size
+        else:
+            self.img_size = None
+        self.num_patches = img_size  # patch数量即为输入长度
+        if output_fmt is not None:
+            self.flatten = False
+            self.output_fmt = Format(output_fmt)
+        else:
+            # flatten spatial dim and transpose to channels last, kept for bwd compat
+            self.flatten = flatten
+            self.output_fmt = Format.NCHW
+
+        self.strict_img_size = strict_img_size
+        self.dynamic_img_pad = dynamic_img_pad
+
+        self.proj = nn.Conv1d(in_chans, embed_dim, kernel_size=1, bias=bias)
+        self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
+
+    def forward(self, x):
+        B, C, L = x.shape
+        if self.img_size is not None:
+            if self.strict_img_size:
+                assert(L == self.img_size, f"Input length ({L}) doesn't match model ({self.img_size}).")
+            elif not self.dynamic_img_pad:
+                assert(
+                    L % self.patch_size == 0,
+                    f"Input length ({L}) should be divisible by patch size ({self.patch_size})."
+                )
+
+        x = self.proj(x)  # in_channel -> emb_dim
+        x = x.transpose(1, 2)  # NCL -> NLC
+        # if self.output_fmt != Format.NCHW:
+        #     x = nchw_to(x, self.output_fmt)
+        x = self.norm(x)
+        return x
 
 #################################################################################
 #                   Sine/Cosine Positional Embedding Functions                  #
@@ -623,6 +840,15 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
     return emb
 
+def nchw_to(x: torch.Tensor, fmt: Format):
+    if fmt == Format.NHWC:
+        x = x.permute(0, 2, 3, 1)
+    elif fmt == Format.NLC:
+        x = x.flatten(2).transpose(1, 2)
+    elif fmt == Format.NCL:
+        x = x.flatten(2)
+    return x
+
 
 if __name__ == '__main__':
     from torchinfo import summary
@@ -644,6 +870,12 @@ if __name__ == '__main__':
     # grid_h = 4
     # pos_embedding = get_2d_sincos_pos_embed_yang(emb_dim, grid_w, grid_h)
     # print(pos_embedding.shape)
+
+    # # # 1d-position-embed测试
+    # grid = np.arange(300, dtype=np.float32)
+    # pos_emb_dim = 768
+    # pos_emb = get_1d_sincos_pos_embed_from_grid(pos_emb_dim, grid)
+    # print("encodes shape: ", pos_emb.shape)
 
     # # #  DiTBlock测试
     # block = DiTBlock(hidden_size=768,
@@ -679,13 +911,26 @@ if __name__ == '__main__':
     # pred = outputs
     # print(pred.shape)
 
+    # # # DIT测试——E2E测试
+    # input_size = 300
+    # x = torch.randn(2, 16, input_size).to(device)
+    # t = torch.randint(0, 1000, (2, )).to(device)
+    # y = torch.randn(2, 8, input_size).to(device)
+    # # c = torch.randn(2, 256, 5, 20).to(device)  # mel 条件
+    # model = DiTE2E(input_size=input_size, in_channels=16, hidden_size=768, depth=12, num_heads=12, custom_shape=False)
+    # # summary(model, input_size=((2, 16, 257),(2, ), (2, 8, 257)))  # , mode="train"
+    # model.cuda()
+    # outputs = model(x, t, y)
+    # pred = outputs
+    # print(pred.shape)
+
     # # DIT测试——E2E测试
     input_size = 300
     x = torch.randn(2, 16, input_size).to(device)
     t = torch.randint(0, 1000, (2, )).to(device)
     y = torch.randn(2, 8, input_size).to(device)
     # c = torch.randn(2, 256, 5, 20).to(device)  # mel 条件
-    model = DiTE2E(input_size=input_size, in_channels=16, hidden_size=768, depth=12, num_heads=12, custom_shape=False)
+    model = DiTE2EV2(input_size=input_size, in_channels=16, hidden_size=768, depth_t=2, depth=12, num_heads=12)
     # summary(model, input_size=((2, 16, 257),(2, ), (2, 8, 257)))  # , mode="train"
     model.cuda()
     outputs = model(x, t, y)
