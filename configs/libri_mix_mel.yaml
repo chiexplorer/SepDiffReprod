@@ -27,15 +27,15 @@ model:
         - 4
         - 4
         in_channels: 3
-        hidden_size: 1024
+        hidden_size: 768
         depth: 12
-        num_heads: 16
+        num_heads: 12
         custom_shape: True
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:
         verbosity_interval: 0
-        warm_up_steps: 1000
+        warm_up_steps: 2000
         max_decay_steps: 80000
         lr_start: 0.0001
         lr_max: 0.0003
@@ -74,7 +74,7 @@ data:
       target: ldm.data.librimix.LibriMixData
       params:
         config:
-          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_train-100-test.csv"
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_train-360.csv"
           use_mel_file: True
           orig_sample_rate: 16000
           sampling_rate: 22050
@@ -93,7 +93,7 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 1
+        batch_frequency: 3000
         max_images: 1
         clamp: True
         log_first_step: True
@@ -103,5 +103,5 @@ lightning:
         }
 
   trainer:
-    max_epochs: 100
-    precision: 32
+    max_epochs: 30
+    precision: 16

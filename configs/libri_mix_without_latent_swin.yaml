@@ -1,0 +1,125 @@
+model:
+  base_learning_rate: 1.0
+  target: ldm.models.diffusion.ddpm.DDPMCustom
+  params:
+    linear_start: 0.0015
+    linear_end: 0.0195
+    log_every_t: 200
+    timesteps: 1000
+    first_stage_key:
+      - "s1_mel"
+      - "s2_mel"
+    cond_stage_key: "mix_mel"
+    image_size: 80
+    image_size_h: 320
+    channels: 2
+    conditioning_key: crossattn
+    monitor: train_loss
+    unet_config:
+      target: ldm.modules.diffusionmodules.swin_unet.SwinTransformerSysCustom
+      params:
+        img_size:
+          - 80
+          - 320
+        patch_size:
+          - 2
+          - 2
+        in_chans: 2
+        num_classes: 2
+        embed_dim: 96
+        window_size: 10
+        pretrained: False
+        use_cross_attn: True
+        d_head: 32
+        emb_channels: 384
+        use_scale_shift_norm: False
+        context_mode: 'patch_learnable'
+        context_patch: 4
+        context_dim: 96
+        final_upsample: "expand_first"
+    scheduler_config:
+      target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
+      params:
+        verbosity_interval: 0
+        warm_up_steps: 2000
+        max_decay_steps: 80000
+        lr_start: 0.0001
+        lr_max: 0.0003
+        lr_min: 0.000015
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 16
+    num_workers: 0
+    wrap: false
+    train:
+      target: ldm.data.librimix.LibriMixData
+      params:
+        config:
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_train-100-test.csv"
+          use_mel_file: True
+          orig_sample_rate: 16000
+          sampling_rate: 22050
+          n_fft: 1024
+          hop_size: 256
+          win_size: 1024
+          num_mels: 80
+          fmin: 0
+          fmax: 8000
+          fixed_len: 82000
+          mel_min: -11.5129
+          mel_max: 1.0908
+    test:
+      target: ldm.data.librimix.LibriMixData
+      params:
+        config:
+          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_test-test.csv"
+          use_mel_file: True
+          orig_sample_rate: 16000
+          sampling_rate: 22050
+          n_fft: 1024
+          hop_size: 256
+          win_size: 1024
+          num_mels: 80
+          fmin: 0
+          fmax: 8000
+          fixed_len: 82000
+          mel_min: -11.5129
+          mel_max: 1.0908
+#    validation:
+#      target: ldm.data.librimix.LibriMixData
+#      params:
+#        config:
+#          mel_path: "D:/Projects/pyprog/SepDiffReprod/data/log_mel_spec/libri2mix_dev-test.csv"
+#          use_mel_file: True
+#          orig_sample_rate: 16000
+#          sampling_rate: 22050
+#          n_fft: 1024
+#          hop_size: 256
+#          win_size: 1024
+#          num_mels: 80
+#          fmin: 0
+#          fmax: 8000
+#          fixed_len: 82000
+#          mel_min: -11.5129
+#          mel_max: 1.0908
+
+lightning:
+  callbacks:
+    image_logger:
+      target: main.ImageLogger
+      params:
+        batch_frequency: 1000
+        max_images: 1
+        clamp: True
+        log_first_step: True
+        increase_log_steps: False
+        log_images_kwargs: {
+          N: 1,
+          n_row: 1,
+        }
+
+  trainer:
+    max_epochs: 100
+    precision: 16

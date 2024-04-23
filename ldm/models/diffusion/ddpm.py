@@ -985,7 +985,7 @@ class DDPMCustom(pl.LightningModule):
         if bs is not None:
             x = x[:bs]
         x = x.to(self.device)
-        # 若仅返回条件，返回之
+        # 若仅返回条件
         if only_c:
             return x
 
@@ -1004,6 +1004,11 @@ class DDPMCustom(pl.LightningModule):
                     xc = self.get_input(batch, cond_key, only_c=True).to(self.device)
             else:
                 xc = x  # 条件=样本
+
+            if bs is not None:
+                xc = xc[:bs]
+            # 令c的dtype与z一致
+            xc = xc.to(x.dtype)
         else:
             xc = None
 
@@ -1048,10 +1053,10 @@ class DDPMCustom(pl.LightningModule):
 
         self.log_dict(loss_dict, prog_bar=True,
                       logger=True, on_step=True, on_epoch=True)
-        # self.log("train_loss", loss, prog_bar=True,
-        #               logger=True, on_step=True, on_epoch=True)
-        self.log("global_step", self.global_step,
-                 prog_bar=True, logger=True, on_step=True, on_epoch=False)
+        self.log("train_loss", loss, prog_bar=True,
+                      logger=True, on_step=True, on_epoch=True)
+        # self.log("global_step", self.global_step,
+        #          prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
         if self.use_scheduler:
             lr = self.optimizers().param_groups[0]['lr']
@@ -1065,10 +1070,12 @@ class DDPMCustom(pl.LightningModule):
         with self.ema_scope():
             _, loss_dict_ema = self.shared_step(batch)
             loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
-        # self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
-        # self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
-        self.loss("loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
+        self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
+    @torch.no_grad()
+    def test_step(self, batch, batch_idx):
+        pass
 
     def on_train_batch_end(self, *args, **kwargs):
         if self.use_ema:
@@ -1090,14 +1097,14 @@ class DDPMCustom(pl.LightningModule):
         use_ddim = ddim_steps is not None
         log = dict()
         if isinstance(self.first_stage_key, omegaconf.listconfig.ListConfig):
-            # 在W维度拼接源
+            # 在指定维度拼接源
             for i, k in enumerate(self.first_stage_key):
                 # 依次为 样本编码、条件编码、原始样本、样本解码、原始条件
                 x_per, xc = self.get_input(batch, k,
                                                    return_first_stage_outputs=True,
                                                    force_c_encode=True,
                                                    return_original_cond=True,
-                                                   bs=N, only_x=i != 0)
+                                                   bs=N, only_x=i != 1)
                 if i == 0:
                     x = x_per
                 else:
@@ -1117,19 +1124,19 @@ class DDPMCustom(pl.LightningModule):
         if self.model.conditioning_key is not None:
             log["conditioning"] = xc
 
-        # get diffusion row
-        diffusion_row = list()
-        x_start = x[:n_row]
-
-        for t in range(self.num_timesteps):
-            if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
-                t = repeat(torch.tensor([t]), '1 -> b', b=n_row)
-                t = t.to(self.device).long()
-                noise = torch.randn_like(x_start)
-                x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-                diffusion_row.append(x_noisy)
-
-        log["diffusion_row"] = self._get_rows_from_list(diffusion_row)
+        # # get diffusion row
+        # diffusion_row = list()
+        # x_start = x[:n_row]
+        #
+        # for t in range(self.num_timesteps):
+        #     if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
+        #         t = repeat(torch.tensor([t]), '1 -> b', b=n_row)
+        #         t = t.to(self.device).long()
+        #         noise = torch.randn_like(x_start)
+        #         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        #         diffusion_row.append(x_noisy)
+        #
+        # log["diffusion_row"] = self._get_rows_from_list(diffusion_row)
 
         if sample:
             # get denoise row
@@ -1138,8 +1145,41 @@ class DDPMCustom(pl.LightningModule):
                                                          ddim_steps=ddim_steps,eta=ddim_eta)
 
             log["samples"] = samples
-            log["denoise_row"] = self._get_rows_from_list(denoise_row)
+            # log["denoise_row"] = self._get_rows_from_list(denoise_row)
 
+        if return_keys:
+            if np.intersect1d(list(log.keys()), return_keys).shape[0] == 0:
+                return log
+            else:
+                return {key: log[key] for key in return_keys}
+        return log
+
+    @torch.no_grad()
+    def log_npy(self, batch, N=8, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None, ):
+        use_ddim = ddim_steps is not None
+        log = dict()
+        # 在指定维度拼接源
+        for i, k in enumerate(self.first_stage_key):
+            # input = self.get_input(batch, k, )
+            # 依次为 样本编码、条件编码、原始样本、样本解码
+            z_per, c = self.get_input(batch, k,
+                                       return_first_stage_outputs=False,
+                                       force_c_encode=False,
+                                       return_original_cond=False,
+                                       bs=N, only_x=i != 1)
+            if i == 0:
+                z = z_per
+            else:
+                z = torch.cat([z, z_per], dim=1)
+
+        # 采样
+        if sample:
+            # get denoise row
+            with self.ema_scope("Plotting"):
+                samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
+                                                         ddim_steps=ddim_steps,eta=ddim_eta)
+            log["samples"] = samples
+        # 是否指定需要返回的key
         if return_keys:
             if np.intersect1d(list(log.keys()), return_keys).shape[0] == 0:
                 return log
@@ -1153,6 +1193,20 @@ class DDPMCustom(pl.LightningModule):
         if self.learn_logvar:
             params = params + [self.logvar]
         opt = torch.optim.AdamW(params, lr=lr)
+        # 配置调度器, if neccesary
+        if self.use_scheduler:
+            assert 'target' in self.scheduler_config
+            scheduler = instantiate_from_config(self.scheduler_config)
+
+            print("Setting up LambdaLR scheduler...")
+            scheduler = [
+                {
+                    'scheduler': LambdaLR(opt, lr_lambda=scheduler.schedule),
+                    'interval': 'step',
+                    'frequency': 1
+                }
+            ]
+            return [opt], scheduler
         return opt
 
 

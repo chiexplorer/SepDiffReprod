@@ -292,7 +292,7 @@ class SetupCallback(Callback):
 class ImageLogger(Callback):
     def __init__(self, batch_frequency, max_images, clamp=True, increase_log_steps=True,
                  rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
-                 log_images_kwargs=None):
+                 log_images_kwargs=None, cat_dim='h'):
         super().__init__()
         self.rescale = rescale
         self.batch_freq = batch_frequency
@@ -308,6 +308,7 @@ class ImageLogger(Callback):
         self.log_on_batch_idx = log_on_batch_idx
         self.log_images_kwargs = log_images_kwargs if log_images_kwargs else {}
         self.log_first_step = log_first_step
+        self.cat_dim = cat_dim
 
     @rank_zero_only
     def _testtube(self, pl_module, images, batch_idx, split):
@@ -322,7 +323,7 @@ class ImageLogger(Callback):
 
     @rank_zero_only
     def log_local(self, save_dir, split, images,
-                  global_step, current_epoch, batch_idx):
+                  global_step, current_epoch, batch_idx, pathes):
         """
         :desc: 保存log images到指定文件夹
         :param save_dir:
@@ -334,22 +335,50 @@ class ImageLogger(Callback):
         :return:
         """
         root = os.path.join(save_dir, "images", split)
-        # 将images内的图片保存到对应路径下
-        for k in images:
-            grid = torchvision.utils.make_grid(images[k], nrow=4)
-            if self.rescale:
-                grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
-            grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
-            grid = grid.numpy()
-            grid = (grid * 255).astype(np.uint8)
-            filename = "{}_gs-{:06}_e-{:06}_b-{:06}.png".format(
-                k,
-                global_step,
-                current_epoch,
-                batch_idx)
-            path = os.path.join(root, filename)
-            os.makedirs(os.path.split(path)[0], exist_ok=True)
-            Image.fromarray(grid).save(path)
+        # 根据拼接源的方向采取不同的处理
+        if self.cat_dim == 'h':
+            # 将images内的图片保存到对应路径下
+            for k in images:
+                idx = 0
+                # 处理batch个图像
+                for img_pair in images[k]:
+                    grid = torchvision.utils.make_grid(img_pair, nrow=4)
+                    if self.rescale:
+                        grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+                    grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+                    grid = grid.numpy()
+                    grid = (grid * 255).astype(np.uint8)
+                    filename = "{}__{}.png".format(
+                        k,
+                        pathes[idx]
+                    )
+                    path = os.path.join(root, filename)
+                    os.makedirs(os.path.split(path)[0], exist_ok=True)
+                    Image.fromarray(grid).save(path)
+                    idx += 1
+        elif self.cat_dim == 'c':
+            for k in images:
+                # 改为在H方向拼接
+                if images[k].shape[1] == 2:
+                    B, C, H, W = images[k].shape
+                    images[k] = images[k].view(B, 1, C*H, W)
+                idx = 0
+                # 处理batch个图像
+                for img_pair in images[k]:
+                    grid = torchvision.utils.make_grid(img_pair, nrow=4)
+                    if self.rescale:
+                        grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+                    grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+                    grid = grid.numpy()
+                    grid = (grid * 255).astype(np.uint8)
+                    filename = "{}__{}.png".format(
+                        k,
+                        pathes[idx]
+                    )
+                    path = os.path.join(root, filename)
+                    os.makedirs(os.path.split(path)[0], exist_ok=True)
+                    Image.fromarray(grid).save(path)
+                    idx += 1
 
     def log_img(self, pl_module, batch, batch_idx, split="train"):
         check_idx = batch_idx if self.log_on_batch_idx else pl_module.global_step
@@ -378,7 +407,7 @@ class ImageLogger(Callback):
                         images[k] = torch.clamp(images[k], -1., 1.)
             # 存到本地指定路径下
             self.log_local(pl_module.logger.save_dir, split, images,
-                           pl_module.global_step, pl_module.current_epoch, batch_idx)
+                           pl_module.global_step, pl_module.current_epoch, batch_idx, batch['path'])
 
             logger_log_images = self.logger_log_images.get(logger, lambda *args, **kwargs: None)
             logger_log_images(pl_module, images, pl_module.global_step, split)
@@ -579,7 +608,7 @@ class AudioLogger(Callback):
 class NpyLogger(Callback):
     def __init__(self, batch_frequency, max_images, save_path="./", clamp=True, increase_log_steps=True,
                  rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
-                 log_images_kwargs=None):
+                 log_images_kwargs=None, cat_dim='h'):
         super().__init__()
         self.batch_freq = batch_frequency
         self.max_images = max_images

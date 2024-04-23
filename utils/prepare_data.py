@@ -140,14 +140,14 @@ if __name__ == '__main__':
     # fpath = r"D:\Data\AiShell1-mix-test"
     # fpath = r"D:\Data\LibriMixAligned\Libri2Mix"
     # fpath = r"H:\exp\dataset\LibriMix\Libri2Mix"  # 专用固态——mel spec
-    fpath = r"H:\exp\dataset\LibriMixE2E\Libri2Mix"  # 专用固态——encodec
+    fpath = r"H:\exp\dataset\LibriMixAligned\Libri2Mix"  # 专用固态——encodec
 
-    savepath = "../data/encodec"
+    savepath = "../data/log_mel_spec"
     # create_aishell1mix2_csv(datapath=fpath, savepath=savepath)
     create_libri2mix_csv(  # "train-100", "test", "dev"
         datapath=fpath,
         savepath=savepath,
         version="wav16k/min/",
-        set_types=["train-100", ]
+        set_types=["train-360", ]
     )
     print("Done.")

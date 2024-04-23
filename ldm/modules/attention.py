@@ -254,15 +254,15 @@ class SpatialTransformer(nn.Module):
         x = self.norm(x)
         x = self.proj_in(x)  # in_channel -> inner_dim
         x = rearrange(x, 'b c h w -> b (h w) c')  # 原代码 patch
-        # x = rearrange(x, 'b c h w -> b (c w) h')  # librimix无压缩版 临时用
         # 临时用，处理二维条件形式的输入
         if context is not None:
-            context = rearrange(context, 'b c h w ->b (h w) c')
-            # context = rearrange(context, 'b c h w ->b (c w) h')  # librimix无压缩版 临时用
+            if context.dim() == 4:
+                context = rearrange(context, 'b c h w -> b (h w) c')
+            elif context.dim() == 3:
+                pass
         for block in self.transformer_blocks:
             x = block(x, context=context)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)  # 原代码
-        # x = rearrange(x, 'b (c w) h -> b c h w', h=h, w=w)  # librimix无压缩版 临时用
         x = self.proj_out(x)  # inner_dim -> in_channel
         return x + x_in
 

@@ -757,7 +757,7 @@ if __name__ == "__main__":
                     "max_images": 1,
                     "clamp": True
                 }
-            },
+            }, 
         """
         default_callbacks_cfg = {
             "setup_callback": {
@@ -788,7 +788,7 @@ if __name__ == "__main__":
                 "params": {
                     "monitor": model.monitor,
                     "min_delta": 0.0005,
-                    "patience": 8,
+                    "patience": 6,
                     "mode": "min",
                     "verbose": True
                 }

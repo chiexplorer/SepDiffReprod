@@ -977,22 +977,25 @@ if __name__ == '__main__':
     # UNet模型测试
     params = {
         "image_size": 64,
-        "in_channels": 1,
-        "out_channels": 1,
+        "in_channels": 2,
+        "out_channels": 2,
         "model_channels": 128,
         "attention_resolutions": [8, 4, 2],
         "num_res_blocks": 2,
         "channel_mult": [1, 2, 3],
         "num_head_channels": 32,
+        "use_spatial_transformer": True,
+        "context_dim": 1,
     }
     model = UNetModel(**params)
     model = model.cuda()
     for name, module in model.named_children():
         print("---: ", name)
-    x = torch.randn(4, 1, 80, 320, device='cuda')
+    x = torch.randn(4, 2, 80, 320, device='cuda')
     timestamps = torch.randn(4, device='cuda')
-    pred = model(x, timestamps)
-    summary(model, input_data=[x, timestamps], mode='train')
+    c = torch.randn(4, 1, 80, 320, device='cuda')
+    pred = model(x, timestamps, c)
+    # summary(model, input_data=[x, timestamps], mode='train')
     print(pred.shape)
 
     # # ResBlock模块测试
@@ -1015,8 +1018,8 @@ if __name__ == '__main__':
     # t_emb = timestep_embedding(t, model_channels, repeat_only=False)
     # print("input: ", x.shape)
     # pred = module(x, t_emb)
-    # modelData = "./resBlock.onnx"
-    # torch.onnx.export(module, (x, t_emb), modelData)
-    # netron.start(modelData)
+    # # modelData = "./resBlock.onnx"
+    # # torch.onnx.export(module, (x, t_emb), modelData)
+    # # netron.start(modelData)
     # # summary(module, input_data=[x, t_emb], mode='train')
     # print("output: ", pred.shape)

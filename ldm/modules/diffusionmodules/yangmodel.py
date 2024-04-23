@@ -305,12 +305,14 @@ class DiT(nn.Module):
         # patch位置编码, shape (1, grid[0]*grid[1], hidden_size)
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
         self.y_pos_embed = nn.Parameter(torch.zeros(1, num_patches//2, hidden_size), requires_grad=False)  # y的位置编码
-
+        # self.blocks_t = nn.ModuleList([
+        #     DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(2)
+        # ])  # 时间步融合crossAttn
         self.blocks = nn.ModuleList([
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        # self.initialize_weights()
+        self.initialize_weights()
 
     def initialize_weights(self):
         # Initialize transformer layers:
@@ -402,6 +404,12 @@ class DiT(nn.Module):
             context = self.y_embedder(context, self.training)    # (N, D)
 
         c = t + context  # (N, D)
+        # 融合时间步信息
+        # c = context
+        # for block in self.blocks_t:
+        #     x = block(x, t)  # (N, T, D)
+        # for block in self.blocks_t:
+        #     c = block(c, t)  # (N, T, D)
         for block in self.blocks:
             x = block(x, c)  # (N, T, D)
         if self.custom_shape:
@@ -899,17 +907,18 @@ if __name__ == '__main__':
     # pred, _ = torch.split(outputs, x.shape[1], dim=1)
     # print(pred.shape)
 
-    # # # DIT测试——模仿UNet的输入
-    # x = torch.randn(2, 256, 10, 20)
-    # t = torch.randint(0, 1000, (2, )).to(device)
-    # y = torch.randint(0, 1000, (2, )).to(device)
-    # c = torch.randn(2, 256, 5, 20).to(device)  # mel 条件
-    # x = x.to(device)
-    # model = DiT(input_size=(10, 20), patch_size=(5, 5), in_channels=256, hidden_size=768, depth=12, num_heads=12, custom_shape=True)
-    # model.cuda()
-    # outputs = model(x, t, c)
-    # pred = outputs
-    # print(pred.shape)
+    # # DIT测试——模仿UNet的输入
+    x = torch.randn(2, 3, 40, 80)
+    t = torch.randint(0, 1000, (2, )).to(device)
+    y = torch.randint(0, 1000, (2, )).to(device)
+    c = torch.randn(2, 3, 20, 80).to(device)  # mel 条件
+    x = x.to(device)
+    model = DiT(input_size=(40, 80), patch_size=(4, 4), in_channels=3, hidden_size=768, depth=12, num_heads=12, custom_shape=True)
+    model.cuda()
+    outputs = model(x, t, c)
+    pred = outputs
+    print(pred.shape)
+
 
     # # # DIT测试——E2E测试
     # input_size = 300
@@ -924,18 +933,18 @@ if __name__ == '__main__':
     # pred = outputs
     # print(pred.shape)
 
-    # # DIT测试——E2E测试
-    input_size = 300
-    x = torch.randn(2, 16, input_size).to(device)
-    t = torch.randint(0, 1000, (2, )).to(device)
-    y = torch.randn(2, 8, input_size).to(device)
-    # c = torch.randn(2, 256, 5, 20).to(device)  # mel 条件
-    model = DiTE2EV2(input_size=input_size, in_channels=16, hidden_size=768, depth_t=2, depth=12, num_heads=12)
-    # summary(model, input_size=((2, 16, 257),(2, ), (2, 8, 257)))  # , mode="train"
-    model.cuda()
-    outputs = model(x, t, y)
-    pred = outputs
-    print(pred.shape)
+    # # # DIT测试——E2E测试
+    # input_size = 300
+    # x = torch.randn(2, 16, input_size).to(device)
+    # t = torch.randint(0, 1000, (2, )).to(device)
+    # y = torch.randn(2, 8, input_size).to(device)
+    # # c = torch.randn(2, 256, 5, 20).to(device)  # mel 条件
+    # model = DiTE2EV2(input_size=input_size, in_channels=16, hidden_size=768, depth_t=2, depth=12, num_heads=12)
+    # # summary(model, input_size=((2, 16, 257),(2, ), (2, 8, 257)))  # , mode="train"
+    # model.cuda()
+    # outputs = model(x, t, y)
+    # pred = outputs
+    # print(pred.shape)
 
     # netron可视化
     # modelData = "./DiTE2E.pth"
